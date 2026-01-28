@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RAGAnything Local UI</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 24px;
+        color: #222;
+      }
+      .section {
+        margin-bottom: 24px;
+        padding: 16px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+      }
+      label {
+        display: block;
+        margin-top: 8px;
+      }
+      input[type="text"],
+      textarea {
+        width: 100%;
+        padding: 8px;
+        margin-top: 4px;
+        box-sizing: border-box;
+      }
+      button {
+        margin-top: 12px;
+        padding: 8px 12px;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>RAGAnything Local UI</h2>
+
+    <div class="section">
+      <h3>API Key</h3>
+      <label>API Key (x-api-key)</label>
+      <input id="apiKey" type="text" placeholder="Set RAGANYTHING_API_KEY env" />
+    </div>
+
+    <div class="section">
+      <h3>Ingest Document</h3>
+      <label>Doc ID (optional)</label>
+      <input id="docId" type="text" placeholder="custom doc_id" />
+
+      <label>Upload File</label>
+      <input id="fileInput" type="file" />
+
+      <button onclick="ingestFile()">Ingest</button>
+      <div id="ingestResult"></div>
+    </div>
+
+    <div class="section">
+      <h3>Query</h3>
+      <label>Doc ID</label>
+      <input id="queryDocId" type="text" placeholder="doc_id from ingest" />
+
+      <label>Question</label>
+      <textarea id="question" rows="4" placeholder="Ask a question"></textarea>
+
+      <button onclick="runQuery()">Query</button>
+      <h4>Answer</h4>
+      <pre id="answer"></pre>
+    </div>
+
+    <script>
+      function getApiKey() {
+        return document.getElementById("apiKey").value || "";
+      }
+
+      async function ingestFile() {
+        const fileInput = document.getElementById("fileInput");
+        const docId = document.getElementById("docId").value;
+        const resultEl = document.getElementById("ingestResult");
+
+        if (!fileInput.files.length) {
+          resultEl.textContent = "Please select a file.";
+          return;
+        }
+
+        const form = new FormData();
+        form.append("file", fileInput.files[0]);
+        if (docId) {
+          form.append("doc_id", docId);
+        }
+
+        const resp = await fetch("/ingest", {
+          method: "POST",
+          headers: {
+            "x-api-key": getApiKey(),
+          },
+          body: form,
+        });
+
+        const data = await resp.json();
+        resultEl.textContent = resp.ok
+          ? `Ingested: ${data.doc_id}`
+          : `Error: ${data.detail || JSON.stringify(data)}`;
+        if (resp.ok) {
+          document.getElementById("queryDocId").value = data.doc_id;
+        }
+      }
+
+      async function runQuery() {
+        const docId = document.getElementById("queryDocId").value;
+        const question = document.getElementById("question").value;
+        const answerEl = document.getElementById("answer");
+
+        if (!docId || !question) {
+          answerEl.textContent = "Please provide doc_id and question.";
+          return;
+        }
+
+        const resp = await fetch("/query", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": getApiKey(),
+          },
+          body: JSON.stringify({
+            doc_id: docId,
+            query: question,
+          }),
+        });
+
+        const data = await resp.json();
+        answerEl.textContent = resp.ok
+          ? data.answer
+          : `Error: ${data.detail || JSON.stringify(data)}`;
+      }
+    </script>
+  </body>
+</html>

@@ -1035,6 +1035,73 @@ python examples/text_format_test.py --check-reportlab --file dummy
 
 ---
 
+## Evaluation (DocBench / MMLongBench)
+
+### DocBench
+1. Download DocBench data and place it under `./data/docbench`.
+2. Ensure each folder contains a PDF and `{folder}_qa.jsonl`.
+3. Run:
+
+```bash
+python scripts/eval_docbench.py --data_root ./data/docbench --output_dir ./eval_outputs/docbench
+```
+
+Outputs:
+- `./eval_outputs/docbench/raganything_eval_input.jsonl`
+- `./eval_outputs/docbench/raganything_results.jsonl`
+
+You can feed `raganything_eval_input.jsonl` into DocBench's `evaluate.py` as the eval input file.
+
+Download script:
+
+```bash
+python scripts/download_docbench.py --folder <google_drive_folder_url_or_id> --output_dir ./data/docbench
+```
+
+### MMLongBench-Doc
+1. Download PDFs and place them under `./data/mmlongbench/docs` with name `{doc_id}.pdf`.
+2. Run (HF dataset):
+
+```bash
+python scripts/eval_mmlongbench.py --docs_dir ./data/mmlongbench/docs --output_dir ./eval_outputs/mmlongbench
+```
+
+Outputs:
+- `./eval_outputs/mmlongbench/raganything_results.jsonl`
+- `./eval_outputs/mmlongbench/raganything_metrics.json`
+
+Download questions (HF dataset):
+
+```bash
+python scripts/download_mmlongbench.py --output_jsonl ./data/mmlongbench/mmlongbench.jsonl
+```
+
+Optional: download PDFs with a manifest file containing `doc_id,url` per line:
+
+```bash
+python scripts/download_mmlongbench.py --docs_manifest ./data/mmlongbench/docs_manifest.csv --docs_dir ./data/mmlongbench/docs
+```
+
+---
+
+## FastAPI Local UI
+
+Set API key:
+
+```bash
+set RAGANYTHING_API_KEY=your_key
+```
+
+Run server:
+
+```bash
+uvicorn server.app:app --host 0.0.0.0 --port 8000
+```
+
+Open: `http://localhost:8000`
+
+---
+
 ## 🔧 Configuration
 
 *System Optimization Parameters*
