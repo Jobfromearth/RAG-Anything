@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -9,6 +10,7 @@ from pydantic import BaseModel
 
 from raganything.services.local_rag import LocalRagService, LocalRagSettings
 
+# --- 配置与初始化 ---
 APP_ROOT = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(APP_ROOT / "templates"))
 
@@ -19,14 +21,13 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="RAGAnything Local Service")
 _service: Optional[LocalRagService] = None
 
-
+# --- 依赖注入函数 ---
 def get_service() -> LocalRagService:
     global _service
     if _service is None:
         settings = LocalRagSettings.from_env()
         _service = LocalRagService(settings)
     return _service
-
 
 def verify_api_key(x_api_key: Optional[str] = Header(default=None)):
     expected = os.getenv(API_KEY_ENV, "").strip()
@@ -35,12 +36,7 @@ def verify_api_key(x_api_key: Optional[str] = Header(default=None)):
     if x_api_key != expected:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    return TEMPLATES.TemplateResponse("index.html", {"request": request})
-
-
+# --- 数据模型 ---
 class QueryRequest(BaseModel):
     doc_id: str
     query: str
@@ -50,6 +46,12 @@ class QueryRequest(BaseModel):
     enable_rerank: bool = True
     vlm_enhanced: bool = True
 
+# --- 路由接口 ---
+
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    """渲染首页"""
+    return TEMPLATES.TemplateResponse("index.html", {"request": request})
 
 @app.post("/ingest")
 async def ingest(
@@ -58,6 +60,7 @@ async def ingest(
     _auth: None = Depends(verify_api_key),
     service: LocalRagService = Depends(get_service),
 ):
+    """上传并处理文档"""
     file_path = UPLOAD_DIR / file.filename
     content = await file.read()
     file_path.write_bytes(content)
@@ -65,13 +68,13 @@ async def ingest(
     doc_id = await service.ingest(str(file_path), doc_id=doc_id)
     return {"doc_id": doc_id}
 
-
 @app.post("/query")
 async def query(
     payload: QueryRequest,
     _auth: None = Depends(verify_api_key),
     service: LocalRagService = Depends(get_service),
 ):
+    """执行 RAG 查询"""
     result = await service.query(
         payload.doc_id,
         payload.query,
@@ -83,7 +86,42 @@ async def query(
     )
     return {"answer": result}
 
-
 @app.get("/health")
 def health():
+    """健康检查"""
     return {"status": "ok"}
+
+def _list_workspaces() -> list[dict]:
+    """获取本地所有工作空间（文档库）"""
+    settings = LocalRagSettings.from_env()
+    root = Path(settings.working_dir_root)
+    if not root.exists():
+        return []
+    items = []
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            stat = entry.stat()
+        except OSError:
+            continue
+        items.append(
+            {
+                "doc_id": entry.name,
+                "path": str(entry.resolve()),
+                "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            }
+        )
+    items.sort(key=lambda x: x["updated_at"], reverse=True)
+    return items
+
+@app.get("/workspaces")
+def list_workspaces(
+    _auth: None = Depends(verify_api_key),
+):
+    """工作空间列表 API"""
+    settings = LocalRagSettings.from_env()
+    return {
+        "workdir_root": str(Path(settings.working_dir_root).resolve()),
+        "workspaces": _list_workspaces(),
+    }

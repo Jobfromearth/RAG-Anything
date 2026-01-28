@@ -67,6 +67,9 @@ download_models_hf.py
 lightrag-dev/
 gui/
 tiktoken_cache/
+rag_workspace/
+data/
+uploads/
 
 # unit-test files
 test_*

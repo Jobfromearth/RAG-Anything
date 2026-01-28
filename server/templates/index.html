@@ -9,80 +9,107 @@
         font-family: Arial, sans-serif;
         margin: 24px;
         color: #222;
+        background-color: #f9f9f9;
       }
       .section {
         margin-bottom: 24px;
         padding: 16px;
         border: 1px solid #ddd;
         border-radius: 8px;
+        background-color: #fff;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
       }
       label {
         display: block;
         margin-top: 8px;
+        font-weight: bold;
       }
       input[type="text"],
-      textarea {
+      textarea,
+      select {
         width: 100%;
-        padding: 8px;
-        margin-top: 4px;
+        padding: 10px;
+        margin-top: 6px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
         box-sizing: border-box;
       }
       button {
         margin-top: 12px;
-        padding: 8px 12px;
+        padding: 10px 16px;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #0056b3;
       }
       pre {
         white-space: pre-wrap;
         word-break: break-word;
+        background: #eee;
+        padding: 12px;
+        border-radius: 4px;
+        min-height: 40px;
       }
     </style>
   </head>
   <body>
-    <h2>RAGAnything Local UI</h2>
+    <h2>🏰 RAGAnything 本地管理台</h2>
 
     <div class="section">
-      <h3>API Key</h3>
-      <label>API Key (x-api-key)</label>
-      <input id="apiKey" type="text" placeholder="Set RAGANYTHING_API_KEY env" />
+      <h3>🔑 API Key</h3>
+      <label>密钥 (x-api-key)</label>
+      <input id="apiKey" type="text" placeholder="请输入 RAGANYTHING_API_KEY" />
     </div>
 
     <div class="section">
-      <h3>Ingest Document</h3>
-      <label>Doc ID (optional)</label>
-      <input id="docId" type="text" placeholder="custom doc_id" />
+      <h3>📥 导入文档 (Ingest)</h3>
+      <label>文档标识 (Doc ID - 可选)</label>
+      <input id="docId" type="text" placeholder="自定义 doc_id，留空则自动生成" />
 
-      <label>Upload File</label>
+      <label>选择文件</label>
       <input id="fileInput" type="file" />
 
-      <button onclick="ingestFile()">Ingest</button>
-      <div id="ingestResult"></div>
+      <button onclick="ingestFile()">立即导入</button>
+      <div id="ingestResult" style="margin-top: 10px; color: #555;"></div>
     </div>
 
     <div class="section">
-      <h3>Query</h3>
-      <label>Doc ID</label>
-      <input id="queryDocId" type="text" placeholder="doc_id from ingest" />
+      <h3>🔍 知识问答 (Query)</h3>
+      <label>选择已有工作空间</label>
+      <select id="workspaceSelect">
+        <option value="">(请刷新列表)</option>
+      </select>
+      <button onclick="refreshWorkspaces()">刷新工作空间列表</button>
 
-      <label>Question</label>
-      <textarea id="question" rows="4" placeholder="Ask a question"></textarea>
+      <label>当前文档 ID</label>
+      <input id="queryDocId" type="text" placeholder="待查询的 doc_id" />
 
-      <button onclick="runQuery()">Query</button>
-      <h4>Answer</h4>
-      <pre id="answer"></pre>
+      <label>您的问题</label>
+      <textarea id="question" rows="4" placeholder="请描述您想从文档中了解的内容..."></textarea>
+
+      <button onclick="runQuery()">开始提问</button>
+      <h4>✨ 回答:</h4>
+      <pre id="answer">等待大王垂询...</pre>
     </div>
 
     <script>
+      // 获取用户输入的 API Key
       function getApiKey() {
         return document.getElementById("apiKey").value || "";
       }
 
+      // 上传文档逻辑
       async function ingestFile() {
         const fileInput = document.getElementById("fileInput");
         const docId = document.getElementById("docId").value;
         const resultEl = document.getElementById("ingestResult");
 
         if (!fileInput.files.length) {
-          resultEl.textContent = "Please select a file.";
+          resultEl.textContent = "报告大王：请先选择一个文件！";
           return;
         }
 
@@ -92,50 +119,104 @@
           form.append("doc_id", docId);
         }
 
-        const resp = await fetch("/ingest", {
-          method: "POST",
-          headers: {
-            "x-api-key": getApiKey(),
-          },
-          body: form,
-        });
+        resultEl.textContent = "正在解析文档，请稍候...";
+        
+        try {
+          const resp = await fetch("/ingest", {
+            method: "POST",
+            headers: { "x-api-key": getApiKey() },
+            body: form,
+          });
 
-        const data = await resp.json();
-        resultEl.textContent = resp.ok
-          ? `Ingested: ${data.doc_id}`
-          : `Error: ${data.detail || JSON.stringify(data)}`;
-        if (resp.ok) {
-          document.getElementById("queryDocId").value = data.doc_id;
+          const data = await resp.json();
+          resultEl.textContent = resp.ok
+            ? `✅ 导入成功！Doc ID: ${data.doc_id}`
+            : `❌ 失败: ${data.detail || JSON.stringify(data)}`;
+          
+          if (resp.ok) {
+            document.getElementById("queryDocId").value = data.doc_id;
+            refreshWorkspaces(); // 成功后顺便刷新列表
+          }
+        } catch (e) {
+          resultEl.textContent = "❌ 网络异常，请检查服务器连接。";
         }
       }
 
+      // 查询逻辑
       async function runQuery() {
         const docId = document.getElementById("queryDocId").value;
         const question = document.getElementById("question").value;
         const answerEl = document.getElementById("answer");
 
         if (!docId || !question) {
-          answerEl.textContent = "Please provide doc_id and question.";
+          answerEl.textContent = "报告大王：Doc ID 和问题都不能为空！";
           return;
         }
 
-        const resp = await fetch("/query", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": getApiKey(),
-          },
-          body: JSON.stringify({
-            doc_id: docId,
-            query: question,
-          }),
-        });
+        answerEl.textContent = "正在思考中... 🤔";
 
-        const data = await resp.json();
-        answerEl.textContent = resp.ok
-          ? data.answer
-          : `Error: ${data.detail || JSON.stringify(data)}`;
+        try {
+          const resp = await fetch("/query", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": getApiKey(),
+            },
+            body: JSON.stringify({
+              doc_id: docId,
+              query: question,
+            }),
+          });
+
+          const data = await resp.json();
+          answerEl.textContent = resp.ok
+            ? data.answer
+            : `❌ 错误: ${data.detail || JSON.stringify(data)}`;
+        } catch (e) {
+          answerEl.textContent = "❌ 连接后端失败。";
+        }
       }
+
+      // 刷新列表逻辑
+      async function refreshWorkspaces() {
+        const select = document.getElementById("workspaceSelect");
+        select.innerHTML = "<option value=''>加载中...</option>";
+
+        try {
+          const resp = await fetch("/workspaces", {
+            headers: { "x-api-key": getApiKey() },
+          });
+          const data = await resp.json();
+          
+          if (!resp.ok) {
+            select.innerHTML = "<option value=''>无法加载，请检查密钥</option>";
+            return;
+          }
+
+          const options = data.workspaces || [];
+          if (!options.length) {
+            select.innerHTML = "<option value=''>暂无工作空间</option>";
+            return;
+          }
+
+          select.innerHTML = "<option value=''>-- 请选择 --</option>";
+          options.forEach(item => {
+            const opt = document.createElement("option");
+            opt.value = item.doc_id;
+            opt.textContent = `${item.doc_id} (更新于: ${item.updated_at})`;
+            select.appendChild(opt);
+          });
+
+          select.onchange = () => {
+            if (select.value) document.getElementById("queryDocId").value = select.value;
+          };
+        } catch (e) {
+          select.innerHTML = "<option value=''>网络连接失败</option>";
+        }
+      }
+
+      // 页面加载时尝试获取列表
+      refreshWorkspaces();
     </script>
   </body>
 </html>

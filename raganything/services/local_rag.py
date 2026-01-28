@@ -20,9 +20,10 @@ _MODEL_CACHE: Dict[str, Any] = {}
 
 @dataclass
 class LocalRagSettings:
-    tiktoken_cache_dir: str = "./tiktoken_cache"
-    embedding_model_path: str = "./models/bge-m3"
-    rerank_model_path: str = "./models/bge-reranker-v2-m3"
+    tiktoken_cache_dir: str =  "/data/h50056787/workspaces/lightrag/tiktoken_cache"
+    embedding_model_path: str =  "/data/h50056787/models/bge-m3"
+    rerank_model_path: str = "/data/h50056787/models/bge-reranker-v2-m3"
+
     log_dir: str = "./logs"
     vllm_api_base: str = "http://localhost:8001/v1"
     vllm_api_key: str = "EMPTY"
@@ -52,12 +53,12 @@ class LocalRagSettings:
     @classmethod
     def from_env(cls) -> "LocalRagSettings":
         return cls(
-            tiktoken_cache_dir=os.getenv("TIKTOKEN_CACHE_DIR", "./tiktoken_cache"),
+            tiktoken_cache_dir=os.getenv("TIKTOKEN_CACHE_DIR", "/data/h50056787/workspaces/lightrag/tiktoken_cache"),
             embedding_model_path=os.getenv(
-                "RAGANYTHING_EMBEDDING_MODEL_PATH", "./models/bge-m3"
+                "RAGANYTHING_EMBEDDING_MODEL_PATH", "/data/h50056787/models/bge-m3"
             ),
             rerank_model_path=os.getenv(
-                "RAGANYTHING_RERANK_MODEL_PATH", "./models/bge-reranker-v2-m3"
+                "RAGANYTHING_RERANK_MODEL_PATH", "/data/h50056787/models/bge-reranker-v2-m3"
             ),
             log_dir=os.getenv("RAGANYTHING_LOG_DIR", "./logs"),
             vllm_api_base=os.getenv("VLLM_API_BASE", "http://localhost:8001/v1"),
