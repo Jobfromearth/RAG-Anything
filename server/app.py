@@ -92,12 +92,24 @@ def health():
     """健康检查"""
     return {"status": "ok"}
 
-def _list_workspaces() -> list[dict]:
-    """获取本地所有工作空间（文档库）"""
+def _resolve_workspace_root(root: Optional[str]) -> Path:
     settings = LocalRagSettings.from_env()
-    root = Path(settings.working_dir_root)
-    if not root.exists():
-        return []
+    if root:
+        candidate = Path(root).expanduser()
+        if not candidate.is_absolute():
+            candidate = (Path.cwd() / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+    else:
+        candidate = Path(settings.working_dir_root).resolve()
+
+    if not candidate.exists() or not candidate.is_dir():
+        raise HTTPException(status_code=400, detail="Workspace root not found.")
+    return candidate
+
+
+def _list_workspaces(root: Path) -> list[dict]:
+    """获取本地所有工作空间（文档库）"""
     items = []
     for entry in root.iterdir():
         if not entry.is_dir():
@@ -134,13 +146,14 @@ def _resolve_graph_path(doc_id: str, graph_path: Optional[str]) -> Path:
 
 @app.get("/workspaces")
 def list_workspaces(
+    root: Optional[str] = None,
     _auth: None = Depends(verify_api_key),
 ):
     """工作空间列表 API"""
-    settings = LocalRagSettings.from_env()
+    resolved_root = _resolve_workspace_root(root)
     return {
-        "workdir_root": str(Path(settings.working_dir_root).resolve()),
-        "workspaces": _list_workspaces(),
+        "workdir_root": str(resolved_root),
+        "workspaces": _list_workspaces(resolved_root),
     }
 
 @app.get("/graph", response_class=HTMLResponse)

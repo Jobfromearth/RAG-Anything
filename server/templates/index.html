@@ -86,6 +86,11 @@
 
     <div class="section">
       <h3>🔍 知识问答 (Query)</h3>
+      <label>工作空间根目录</label>
+      <input id="workdirRoot" type="text" placeholder="留空则使用默认根目录" />
+      <div style="margin-top: 6px; color: #666; font-size: 12px;">
+        浏览器无法直接读取本地绝对路径，若需访问其他目录，请手动粘贴路径。
+      </div>
       <label>选择已有工作空间</label>
       <select id="workspaceSelect">
         <option value="">(请刷新列表)</option>
@@ -105,6 +110,8 @@
 
     <div class="section">
       <h3>🧠 知识图谱可视化</h3>
+      <label>工作空间根目录</label>
+      <input id="graphWorkdirRoot" type="text" placeholder="留空则使用默认根目录" />
       <label>选择已有工作空间</label>
       <select id="graphWorkspaceSelect">
         <option value="">(请刷新列表)</option>
@@ -245,11 +252,17 @@
       async function refreshWorkspaces() {
         const select = document.getElementById("workspaceSelect");
         const graphSelect = document.getElementById("graphWorkspaceSelect");
+        const rootInput = document.getElementById("workdirRoot");
+        const graphRootInput = document.getElementById("graphWorkdirRoot");
         select.innerHTML = "<option value=''>加载中...</option>";
         graphSelect.innerHTML = "<option value=''>加载中...</option>";
 
         try {
-          const resp = await fetch("/workspaces", {
+          const rootValue = rootInput.value.trim();
+          const url = rootValue
+            ? `/workspaces?root=${encodeURIComponent(rootValue)}`
+            : "/workspaces";
+          const resp = await fetch(url, {
             headers: { "x-api-key": getApiKey() },
           });
           const data = await resp.json();
@@ -258,6 +271,13 @@
             select.innerHTML = "<option value=''>无法加载，请检查密钥</option>";
             graphSelect.innerHTML = "<option value=''>无法加载，请检查密钥</option>";
             return;
+          }
+
+          if (data.workdir_root) {
+            rootInput.placeholder = data.workdir_root;
+            if (!graphRootInput.value.trim()) {
+              graphRootInput.placeholder = data.workdir_root;
+            }
           }
 
           const options = data.workspaces || [];
@@ -283,6 +303,7 @@
           graphSelect.onchange = () => {
             if (graphSelect.value) document.getElementById("graphDocId").value = graphSelect.value;
           };
+          graphRootInput.value = rootInput.value;
         } catch (e) {
           select.innerHTML = "<option value=''>网络连接失败</option>";
           graphSelect.innerHTML = "<option value=''>网络连接失败</option>";
