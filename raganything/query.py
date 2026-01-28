@@ -115,9 +115,13 @@ class QueryMixin:
         Returns:
             str: Query result
         """
-        if self.lightrag is None:
+        init_status = await self._ensure_lightrag_initialized()
+        if not init_status.get("success"):
             raise ValueError(
-                "No LightRAG instance available. Please process documents first or provide a pre-initialized LightRAG instance."
+                init_status.get(
+                    "error",
+                    "No LightRAG instance available. Please process documents first or provide a pre-initialized LightRAG instance.",
+                )
             )
 
         # Check if VLM enhanced query should be used

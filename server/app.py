@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import random
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
@@ -115,6 +116,22 @@ def _list_workspaces() -> list[dict]:
     items.sort(key=lambda x: x["updated_at"], reverse=True)
     return items
 
+def _resolve_graph_path(doc_id: str, graph_path: Optional[str]) -> Path:
+    settings = LocalRagSettings.from_env()
+    base = Path(settings.working_dir_root).resolve()
+    if graph_path:
+        raw_path = Path(graph_path)
+        if raw_path.is_absolute():
+            candidate = raw_path.resolve()
+        else:
+            candidate = (base / doc_id / raw_path).resolve()
+    else:
+        candidate = (base / doc_id / "graph_chunk_entity_relation.graphml").resolve()
+
+    if base != candidate and base not in candidate.parents:
+        raise HTTPException(status_code=400, detail="Graph path is not allowed.")
+    return candidate
+
 @app.get("/workspaces")
 def list_workspaces(
     _auth: None = Depends(verify_api_key),
@@ -125,3 +142,43 @@ def list_workspaces(
         "workdir_root": str(Path(settings.working_dir_root).resolve()),
         "workspaces": _list_workspaces(),
     }
+
+@app.get("/graph", response_class=HTMLResponse)
+def show_graph(
+    doc_id: str,
+    graph_path: Optional[str] = None,
+    _auth: None = Depends(verify_api_key),
+):
+    """知识图谱可视化 HTML"""
+    graph_file = _resolve_graph_path(doc_id, graph_path)
+    if not graph_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"GraphML not found: {graph_file}",
+        )
+
+    try:
+        import networkx as nx
+        from pyvis.network import Network
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Missing dependency: {exc}",
+        )
+
+    graph = nx.read_graphml(str(graph_file))
+    net = Network(height="100vh", width="100%", notebook=False)
+    net.from_nx(graph)
+
+    for node in net.nodes:
+        node["color"] = "#{:06x}".format(random.randint(0, 0xFFFFFF))
+        description = node.get("description")
+        if description:
+            node["title"] = description
+
+    for edge in net.edges:
+        description = edge.get("description")
+        if description:
+            edge["title"] = description
+
+    return HTMLResponse(net.generate_html())

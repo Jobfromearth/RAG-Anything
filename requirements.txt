@@ -8,6 +8,8 @@ fastapi
 uvicorn
 python-multipart
 jinja2
+networkx
+pyvis
 # Evaluation dataset loading
 datasets
 # OpenAI-compatible client

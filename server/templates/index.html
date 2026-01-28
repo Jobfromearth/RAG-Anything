@@ -54,6 +54,13 @@
         border-radius: 4px;
         min-height: 40px;
       }
+      iframe.graph-frame {
+        width: 100%;
+        height: 600px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        background: #fff;
+      }
     </style>
   </head>
   <body>
@@ -94,6 +101,29 @@
       <button onclick="runQuery()">开始提问</button>
       <h4>✨ 回答:</h4>
       <pre id="answer">等待大王垂询...</pre>
+    </div>
+
+    <div class="section">
+      <h3>🧠 知识图谱可视化</h3>
+      <label>选择已有工作空间</label>
+      <select id="graphWorkspaceSelect">
+        <option value="">(请刷新列表)</option>
+      </select>
+      <button onclick="refreshWorkspaces()">刷新工作空间列表</button>
+
+      <label>图谱 Doc ID</label>
+      <input id="graphDocId" type="text" placeholder="待可视化的 doc_id" />
+
+      <label>GraphML 路径（可选）</label>
+      <input
+        id="graphPath"
+        type="text"
+        placeholder="graph_chunk_entity_relation.graphml"
+      />
+
+      <button onclick="renderGraph()">打开可视化</button>
+      <div id="graphStatus" style="margin-top: 10px; color: #555;"></div>
+      <iframe id="graphFrame" class="graph-frame"></iframe>
     </div>
 
     <script>
@@ -177,10 +207,46 @@
         }
       }
 
+      // 图谱可视化逻辑
+      async function renderGraph() {
+        const docId = document.getElementById("graphDocId").value;
+        const graphPath = document.getElementById("graphPath").value;
+        const frame = document.getElementById("graphFrame");
+        const statusEl = document.getElementById("graphStatus");
+
+        if (!docId) {
+          statusEl.textContent = "报告大王：Doc ID 不能为空！";
+          return;
+        }
+
+        const params = new URLSearchParams({ doc_id: docId });
+        if (graphPath) params.set("graph_path", graphPath);
+
+        statusEl.textContent = "正在生成图谱，请稍候...";
+        frame.srcdoc = "";
+
+        try {
+          const resp = await fetch(`/graph?${params.toString()}`, {
+            headers: { "x-api-key": getApiKey() },
+          });
+          const html = await resp.text();
+          if (!resp.ok) {
+            statusEl.textContent = `❌ 失败: ${html}`;
+            return;
+          }
+          frame.srcdoc = html;
+          statusEl.textContent = "✅ 图谱已加载";
+        } catch (e) {
+          statusEl.textContent = "❌ 网络异常，请检查服务器连接。";
+        }
+      }
+
       // 刷新列表逻辑
       async function refreshWorkspaces() {
         const select = document.getElementById("workspaceSelect");
+        const graphSelect = document.getElementById("graphWorkspaceSelect");
         select.innerHTML = "<option value=''>加载中...</option>";
+        graphSelect.innerHTML = "<option value=''>加载中...</option>";
 
         try {
           const resp = await fetch("/workspaces", {
@@ -190,28 +256,36 @@
           
           if (!resp.ok) {
             select.innerHTML = "<option value=''>无法加载，请检查密钥</option>";
+            graphSelect.innerHTML = "<option value=''>无法加载，请检查密钥</option>";
             return;
           }
 
           const options = data.workspaces || [];
           if (!options.length) {
             select.innerHTML = "<option value=''>暂无工作空间</option>";
+            graphSelect.innerHTML = "<option value=''>暂无工作空间</option>";
             return;
           }
 
           select.innerHTML = "<option value=''>-- 请选择 --</option>";
+          graphSelect.innerHTML = "<option value=''>-- 请选择 --</option>";
           options.forEach(item => {
             const opt = document.createElement("option");
             opt.value = item.doc_id;
             opt.textContent = `${item.doc_id} (更新于: ${item.updated_at})`;
             select.appendChild(opt);
+            graphSelect.appendChild(opt.cloneNode(true));
           });
 
           select.onchange = () => {
             if (select.value) document.getElementById("queryDocId").value = select.value;
           };
+          graphSelect.onchange = () => {
+            if (graphSelect.value) document.getElementById("graphDocId").value = graphSelect.value;
+          };
         } catch (e) {
           select.innerHTML = "<option value=''>网络连接失败</option>";
+          graphSelect.innerHTML = "<option value=''>网络连接失败</option>";
         }
       }
 
