@@ -164,6 +164,7 @@
       border-top: 1px solid var(--border-color);
       display: flex;
       gap: 10px;
+      align-items: center;
     }
     .input-area textarea {
       flex: 1;
@@ -178,6 +179,21 @@
     button { padding: 0 20px; border-radius: 8px; border:none; cursor: pointer; }
     .send-btn { background: #000; color: white; font-weight: bold; }
     .icon-btn { background: none; border: 1px solid #ccc; padding: 5px 10px; color: #555; }
+    .query-params {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 12px;
+      color: #555;
+      white-space: nowrap;
+    }
+    .query-params input {
+      width: 70px;
+      padding: 4px 6px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 12px;
+    }
 
     @keyframes flashHighlight {
       0% { background-color: #fff9c4; }
@@ -222,6 +238,10 @@
       </div>
       <div class="input-area">
         <textarea id="questionInput" placeholder="基于选中的工作区提问..."></textarea>
+        <div class="query-params">
+          <label>top_k <input type="number" id="topKInput" min="1" max="50" value="15"></label>
+          <label>chunk_k <input type="number" id="chunkTopKInput" min="1" max="80" value="30"></label>
+        </div>
         <button class="send-btn" onclick="sendMessage()" id="sendBtn">发送</button>
       </div>
     </div>
@@ -298,6 +318,8 @@
       const text = document.getElementById("questionInput").value.trim();
       if(!text || !currentDocId) return;
       const apiKey = document.getElementById("apiKey").value;
+      const topK = parseInt(document.getElementById("topKInput").value, 10) || 15;
+      const chunkTopK = parseInt(document.getElementById("chunkTopKInput").value, 10) || 30;
       addMessage("user", text);
       document.getElementById("questionInput").value = "";
       const loadingId = addMessage("bot", "思考中...");
@@ -305,7 +327,12 @@
         const resp = await fetch("/query", {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-api-key": apiKey },
-          body: JSON.stringify({ doc_id: currentDocId, query: text })
+          body: JSON.stringify({
+            doc_id: currentDocId,
+            query: text,
+            top_k: topK,
+            chunk_top_k: chunkTopK
+          })
         });
         const data = await resp.json();
         removeMessage(loadingId);

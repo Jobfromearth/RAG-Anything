@@ -48,11 +48,8 @@ class LocalRagSettings:
     temperature: float = 0.1
     max_tokens: int = 1024
     vision_max_tokens: int = 2048
-    max_prompt_chars: int = 12000
-    max_vlm_prompt_chars: int = 12000
-    max_vlm_images: int = 5
-    default_top_k: int = 15
-    default_chunk_top_k: int = 30
+    vlm_max_images: int = 5
+    vlm_max_text_chars: int = 12000
     base_system_prompt: str = (
         "You are Qwen2-VL, an expert multimodal AI assistant. "
         "1. First, analyze ALL images provided at the start. "
@@ -91,11 +88,8 @@ class LocalRagSettings:
             temperature=float(os.getenv("RAGANYTHING_TEMPERATURE", "0.1")),
             max_tokens=int(os.getenv("RAGANYTHING_MAX_TOKENS", "4096")),
             vision_max_tokens=int(os.getenv("RAGANYTHING_VISION_MAX_TOKENS", "2048")),
-            max_prompt_chars=int(os.getenv("RAGANYTHING_MAX_PROMPT_CHARS", "12000")),
-            max_vlm_prompt_chars=int(os.getenv("RAGANYTHING_MAX_VLM_PROMPT_CHARS", "12000")),
-            max_vlm_images=int(os.getenv("RAGANYTHING_MAX_VLM_IMAGES", "5")),
-            default_top_k=int(os.getenv("RAGANYTHING_DEFAULT_TOP_K", "15")),
-            default_chunk_top_k=int(os.getenv("RAGANYTHING_DEFAULT_CHUNK_TOP_K", "30")),
+            vlm_max_images=int(os.getenv("RAGANYTHING_VLM_MAX_IMAGES", "5")),
+            vlm_max_text_chars=int(os.getenv("RAGANYTHING_VLM_MAX_TEXT_CHARS", "12000")),
             base_system_prompt=os.getenv(
                 "RAGANYTHING_BASE_SYSTEM_PROMPT",
                 cls().base_system_prompt,
@@ -209,12 +203,6 @@ def build_llm_model_func(
             for k, v in kwargs.items()
             if k not in ["hashing_kv", "keyword_extraction", "enable_cot"]
         }
-        if isinstance(prompt, str) and settings.max_prompt_chars > 0:
-            if len(prompt) > settings.max_prompt_chars:
-                logger.warning(
-                    f"Prompt too long ({len(prompt)} chars), truncating to {settings.max_prompt_chars}"
-                )
-                prompt = prompt[: settings.max_prompt_chars]
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -256,19 +244,22 @@ def build_vision_model_func(
         }
 
         if messages:
+            def _truncate_text(text: str, max_chars: int) -> str:
+                if max_chars <= 0:
+                    return ""
+                if len(text) <= max_chars:
+                    return text
+                if max_chars <= 20:
+                    return text[-max_chars:]
+                return f"[...truncated...]\n{text[-(max_chars - 15):]}"
+
             original_sys = next(
                 (m["content"] for m in messages if m["role"] == "system"), ""
             )
-            if original_sys:
-                if settings.base_system_prompt and settings.base_system_prompt in original_sys:
-                    full_system = original_sys
-                else:
-                    full_system = (
-                        f"{settings.base_system_prompt}\n\nAdditional Instructions:\n"
-                        f"{original_sys}"
-                    )
-            else:
-                full_system = settings.base_system_prompt
+            full_system = (
+                f"{settings.base_system_prompt}\n\nAdditional Instructions:\n"
+                f"{original_sys}"
+            )
 
             user_content_list = []
             for msg in messages:
@@ -280,30 +271,49 @@ def build_vision_model_func(
                             {"type": "text", "text": str(msg["content"])}
                         )
 
-            images_part = [
-                item
-                for item in user_content_list
-                if item.get("type") == "image_url"
-            ]
+            last_text_idx = None
+            for idx, item in enumerate(user_content_list):
+                if item.get("type") == "text":
+                    last_text_idx = idx
 
-            max_images = settings.max_vlm_images
-            if max_images > 0 and len(images_part) > max_images:
-                logger.warning(
-                    f"Too many images ({len(images_part)}), truncating to {max_images}"
-                )
-                images_part = images_part[:max_images]
+            max_images = max(settings.vlm_max_images, 0)
+            max_text_chars = max(settings.vlm_max_text_chars, 0)
 
-            texts_part = [
-                item.get("text", "").strip()
-                for item in user_content_list
-                if item.get("type") == "text"
-            ]
-            full_text_context = "\n\n".join([t for t in texts_part if t])
-            if settings.max_vlm_prompt_chars > 0 and len(full_text_context) > settings.max_vlm_prompt_chars:
-                logger.warning(
-                    f"VLM prompt too long ({len(full_text_context)} chars), truncating to {settings.max_vlm_prompt_chars}"
-                )
-                full_text_context = full_text_context[: settings.max_vlm_prompt_chars]
+            query_text = ""
+            if last_text_idx is not None:
+                query_text = str(user_content_list[last_text_idx].get("text", ""))
+            remaining_chars = max_text_chars - len(query_text)
+            if remaining_chars < 0:
+                remaining_chars = 0
+
+            selected_reversed = []
+            images_used = 0
+
+            for i in range(len(user_content_list) - 1, -1, -1):
+                item = user_content_list[i]
+                item_type = item.get("type")
+                if item_type == "image_url":
+                    if images_used >= max_images:
+                        continue
+                    images_used += 1
+                    selected_reversed.append(item)
+                    continue
+
+                if item_type != "text":
+                    continue
+
+                if i == last_text_idx:
+                    if query_text:
+                        selected_reversed.append({"type": "text", "text": query_text})
+                    continue
+
+                if remaining_chars <= 0:
+                    continue
+                raw_text = str(item.get("text", ""))
+                trimmed = _truncate_text(raw_text, remaining_chars)
+                if trimmed:
+                    remaining_chars -= len(trimmed)
+                    selected_reversed.append({"type": "text", "text": trimmed})
 
             citation_reminder = (
                 "\n\n----------------\n"
@@ -311,14 +321,17 @@ def build_vision_model_func(
                 "You MUST cite your sources using the format [doc_id] or [Source ID] "
                 "at the end of every sentence where you use information from the context. "
             )
-            final_text_payload = (
-                f"--- RETRIEVED CONTEXT & QUESTION ---\n"
-                f"{full_text_context}{citation_reminder}"
-            )
-
-            final_user_content = []
-            final_user_content.extend(images_part)
-            final_user_content.append({"type": "text", "text": final_text_payload})
+            final_user_content = list(reversed(selected_reversed))
+            for idx in range(len(final_user_content) - 1, -1, -1):
+                if final_user_content[idx].get("type") == "text":
+                    final_user_content[idx]["text"] = (
+                        final_user_content[idx].get("text", "") + citation_reminder
+                    )
+                    break
+            else:
+                final_user_content.append(
+                    {"type": "text", "text": citation_reminder.strip()}
+                )
 
             final_messages = [
                 {"role": "system", "content": full_system},
@@ -398,8 +411,6 @@ class LocalRagService:
             vision_model_func=self.vision_model_func,
             embedding_func=self.embedding_func,
             lightrag_kwargs={
-                "top_k": self.settings.default_top_k,
-                "chunk_top_k": self.settings.default_chunk_top_k,
                 "rerank_model_func": self.rerank_func,
             },
         )

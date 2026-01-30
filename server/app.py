@@ -18,6 +18,8 @@ TEMPLATES = Jinja2Templates(directory=str(APP_ROOT / "templates"))
 API_KEY_ENV = "RAGANYTHING_API_KEY"
 UPLOAD_DIR = Path(os.getenv("RAGANYTHING_UPLOAD_DIR", "./uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+MAX_TOP_K = int(os.getenv("RAGANYTHING_MAX_TOP_K", "15"))
+MAX_CHUNK_TOP_K = int(os.getenv("RAGANYTHING_MAX_CHUNK_TOP_K", "30"))
 
 app = FastAPI(title="RAGAnything Local Service")
 _service: Optional[LocalRagService] = None
@@ -151,12 +153,14 @@ async def query(
     _auth: None = Depends(verify_api_key),
     service: LocalRagService = Depends(get_service),
 ):
+    top_k = max(1, min(payload.top_k, MAX_TOP_K))
+    chunk_top_k = max(1, min(payload.chunk_top_k, MAX_CHUNK_TOP_K))
     result = await service.query(
         payload.doc_id,
         payload.query,
         mode=payload.mode,
-        top_k=payload.top_k,
-        chunk_top_k=payload.chunk_top_k,
+        top_k=top_k,
+        chunk_top_k=chunk_top_k,
         enable_rerank=payload.enable_rerank,
         vlm_enhanced=payload.vlm_enhanced,
     )
