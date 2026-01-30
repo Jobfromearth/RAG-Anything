@@ -6,6 +6,7 @@ Contains all query-related methods for both text and multimodal queries
 
 import json
 import hashlib
+import os
 import re
 from typing import Dict, List, Any
 from pathlib import Path
@@ -21,6 +22,22 @@ from raganything.utils import (
 
 class QueryMixin:
     """QueryMixin class containing query functionality for RAGAnything"""
+
+    def _get_env_int(self, name: str, default: int) -> int:
+        raw = os.getenv(name)
+        if raw is None or raw == "":
+            return default
+        try:
+            value = int(raw)
+            return value
+        except ValueError:
+            return default
+
+    def _get_max_vlm_images(self) -> int:
+        return self._get_env_int("RAGANYTHING_MAX_VLM_IMAGES", 5)
+
+    def _get_max_vlm_prompt_chars(self) -> int:
+        return self._get_env_int("RAGANYTHING_MAX_VLM_PROMPT_CHARS", 12000)
 
     def _generate_multimodal_cache_key(
         self, query: str, multimodal_content: List[Dict[str, Any]], mode: str, **kwargs
@@ -346,6 +363,13 @@ class QueryMixin:
             raw_prompt
         )
 
+        max_prompt_chars = self._get_max_vlm_prompt_chars()
+        if max_prompt_chars > 0 and len(enhanced_prompt) > max_prompt_chars:
+            self.logger.warning(
+                f"VLM prompt too long ({len(enhanced_prompt)} chars), truncating to {max_prompt_chars}"
+            )
+            enhanced_prompt = enhanced_prompt[:max_prompt_chars]
+
         if not images_found:
             self.logger.info("No valid images found, falling back to normal query")
             # Fallback to normal query
@@ -546,6 +570,7 @@ class QueryMixin:
         """
         enhanced_prompt = prompt
         images_processed = 0
+        max_images = self._get_max_vlm_images()
 
         # Initialize image cache
         self._current_images_base64 = []
@@ -562,6 +587,8 @@ class QueryMixin:
 
         def replace_image_path(match):
             nonlocal images_processed
+            if max_images > 0 and images_processed >= max_images:
+                return match.group(0)
 
             image_path = match.group(1).strip()
             self.logger.debug(f"Processing image path: '{image_path}'")
@@ -624,6 +651,12 @@ class QueryMixin:
             List[Dict]: VLM message format
         """
         images_base64 = getattr(self, "_current_images_base64", [])
+        max_images = self._get_max_vlm_images()
+        if max_images > 0 and len(images_base64) > max_images:
+            self.logger.warning(
+                f"VLM images list too long ({len(images_base64)}), truncating to {max_images}"
+            )
+            images_base64 = images_base64[:max_images]
 
         if not images_base64:
             # Pure text mode

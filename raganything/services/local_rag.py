@@ -1,8 +1,18 @@
+#!/usr/bin/env python
+"""
+新开图谱 (处理整个文件夹)：
+python raganything/services/local_rag.py -p ./data/my_paper_folder -i My_New_Graph
+
+补充文件 (向已有图谱添加)：
+python raganything/services/local_rag.py -p ./data/extra.pdf -i My_New_Graph
+"""
+
 import asyncio
 import hashlib
 import logging
 import logging.config
 import os
+import argparse
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -24,18 +34,25 @@ class LocalRagSettings:
     embedding_model_path: str =  "/data/h50056787/models/bge-m3"
     rerank_model_path: str = "/data/h50056787/models/bge-reranker-v2-m3"
 
+    working_dir_root: str = "./rag_workspace"
+    output_dir: str = "./output"
     log_dir: str = "./logs"
+    
     vllm_api_base: str = "http://localhost:8001/v1"
     vllm_api_key: str = "EMPTY"
     llm_model_name: str = "Qwen/Qwen2-VL-7B-Instruct"
     device: str = "cuda:0"
-    working_dir_root: str = "./rag_workspace"
-    output_dir: str = "./output"
+
     embedding_dim: int = 1024
     max_token_size: int = 8192
     temperature: float = 0.1
-    max_tokens: int = 4096
+    max_tokens: int = 1024
     vision_max_tokens: int = 2048
+    max_prompt_chars: int = 12000
+    max_vlm_prompt_chars: int = 12000
+    max_vlm_images: int = 5
+    default_top_k: int = 15
+    default_chunk_top_k: int = 30
     base_system_prompt: str = (
         "You are Qwen2-VL, an expert multimodal AI assistant. "
         "1. First, analyze ALL images provided at the start. "
@@ -74,6 +91,11 @@ class LocalRagSettings:
             temperature=float(os.getenv("RAGANYTHING_TEMPERATURE", "0.1")),
             max_tokens=int(os.getenv("RAGANYTHING_MAX_TOKENS", "4096")),
             vision_max_tokens=int(os.getenv("RAGANYTHING_VISION_MAX_TOKENS", "2048")),
+            max_prompt_chars=int(os.getenv("RAGANYTHING_MAX_PROMPT_CHARS", "12000")),
+            max_vlm_prompt_chars=int(os.getenv("RAGANYTHING_MAX_VLM_PROMPT_CHARS", "12000")),
+            max_vlm_images=int(os.getenv("RAGANYTHING_MAX_VLM_IMAGES", "5")),
+            default_top_k=int(os.getenv("RAGANYTHING_DEFAULT_TOP_K", "15")),
+            default_chunk_top_k=int(os.getenv("RAGANYTHING_DEFAULT_CHUNK_TOP_K", "30")),
             base_system_prompt=os.getenv(
                 "RAGANYTHING_BASE_SYSTEM_PROMPT",
                 cls().base_system_prompt,
@@ -187,6 +209,12 @@ def build_llm_model_func(
             for k, v in kwargs.items()
             if k not in ["hashing_kv", "keyword_extraction", "enable_cot"]
         }
+        if isinstance(prompt, str) and settings.max_prompt_chars > 0:
+            if len(prompt) > settings.max_prompt_chars:
+                logger.warning(
+                    f"Prompt too long ({len(prompt)} chars), truncating to {settings.max_prompt_chars}"
+                )
+                prompt = prompt[: settings.max_prompt_chars]
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -231,10 +259,16 @@ def build_vision_model_func(
             original_sys = next(
                 (m["content"] for m in messages if m["role"] == "system"), ""
             )
-            full_system = (
-                f"{settings.base_system_prompt}\n\nAdditional Instructions:\n"
-                f"{original_sys}"
-            )
+            if original_sys:
+                if settings.base_system_prompt and settings.base_system_prompt in original_sys:
+                    full_system = original_sys
+                else:
+                    full_system = (
+                        f"{settings.base_system_prompt}\n\nAdditional Instructions:\n"
+                        f"{original_sys}"
+                    )
+            else:
+                full_system = settings.base_system_prompt
 
             user_content_list = []
             for msg in messages:
@@ -251,12 +285,25 @@ def build_vision_model_func(
                 for item in user_content_list
                 if item.get("type") == "image_url"
             ]
+
+            max_images = settings.max_vlm_images
+            if max_images > 0 and len(images_part) > max_images:
+                logger.warning(
+                    f"Too many images ({len(images_part)}), truncating to {max_images}"
+                )
+                images_part = images_part[:max_images]
+
             texts_part = [
                 item.get("text", "").strip()
                 for item in user_content_list
                 if item.get("type") == "text"
             ]
             full_text_context = "\n\n".join([t for t in texts_part if t])
+            if settings.max_vlm_prompt_chars > 0 and len(full_text_context) > settings.max_vlm_prompt_chars:
+                logger.warning(
+                    f"VLM prompt too long ({len(full_text_context)} chars), truncating to {settings.max_vlm_prompt_chars}"
+                )
+                full_text_context = full_text_context[: settings.max_vlm_prompt_chars]
 
             citation_reminder = (
                 "\n\n----------------\n"
@@ -292,8 +339,17 @@ def build_vision_model_func(
                 raise
 
         if image_data:
-            raise NotImplementedError("image_data path is not implemented.")
-
+            import base64
+            if isinstance(image_data, bytes):
+                base64_image = base64.b64encode(image_data).decode("utf-8")
+            else:
+                base64_image = str(image_data)
+            
+            user_content_list.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+            })
+            
         return await build_llm_model_func(settings, client, logger)(
             prompt, system_prompt, history_messages, **kwargs
         )
@@ -342,6 +398,8 @@ class LocalRagService:
             vision_model_func=self.vision_model_func,
             embedding_func=self.embedding_func,
             lightrag_kwargs={
+                "top_k": self.settings.default_top_k,
+                "chunk_top_k": self.settings.default_chunk_top_k,
                 "rerank_model_func": self.rerank_func,
             },
         )
@@ -384,3 +442,33 @@ class LocalRagService:
         rag = await self.get_rag(doc_id)
         return await rag.aquery(query, **kwargs)
 
+
+if __name__ == "__main__":
+    
+    parser = argparse.ArgumentParser(description="RAG 后台管理工具")
+    parser.add_argument("--path", "-p", required=True, help="要入库的文件或文件夹路径")
+    parser.add_argument("--id", "-i", required=True, help="工作空间名称 (doc_id)")
+    args = parser.parse_args()
+    
+    async def main():
+        print(f"正在初始化 RAG 服务...")
+        settings = LocalRagSettings.from_env()
+        service = LocalRagService(settings)
+
+        target_path = args.path
+        workspace_name = args.id
+        
+        print(f"开始处理: {target_path}")
+        print(f"目标工作区: {settings.working_dir_root}/{workspace_name}")
+
+        try:
+            await service.ingest(file_path=target_path, doc_id=workspace_name)
+
+            print(f"\n 入库成功！")
+            print(f"知识图谱已更新: {settings.working_dir_root}/{workspace_name}/graph_chunk_entity_relation.graphml")
+            print(f"Markdown 已生成: {settings.output_dir}/{workspace_name}/")
+
+        except Exception as e:
+            print(f"\n 发生错误: {e}")
+    
+    asyncio.run(main())

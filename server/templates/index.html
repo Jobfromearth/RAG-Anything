@@ -1,317 +1,348 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RAGAnything Local UI</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        margin: 24px;
-        color: #222;
-        background-color: #f9f9f9;
-      }
-      .section {
-        margin-bottom: 24px;
-        padding: 16px;
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        background-color: #fff;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-      }
-      label {
-        display: block;
-        margin-top: 8px;
-        font-weight: bold;
-      }
-      input[type="text"],
-      textarea,
-      select {
-        width: 100%;
-        padding: 10px;
-        margin-top: 6px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-        box-sizing: border-box;
-      }
-      button {
-        margin-top: 12px;
-        padding: 10px 16px;
-        background-color: #007bff;
-        color: white;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-      }
-      button:hover {
-        background-color: #0056b3;
-      }
-      pre {
-        white-space: pre-wrap;
-        word-break: break-word;
-        background: #eee;
-        padding: 12px;
-        border-radius: 4px;
-        min-height: 40px;
-      }
-      iframe.graph-frame {
-        width: 100%;
-        height: 600px;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        background: #fff;
-      }
-    </style>
-  </head>
-  <body>
-    <h2>🏰 RAGAnything 本地管理台</h2>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAG Notebook</title>
+  
+  <script src="https://unpkg.com/marked@4.3.0/marked.min.js" onerror="loadFallbackMarked()"></script>
+  <script>
+    function loadFallbackMarked() {
+      console.warn("CDN 加载失败，启用本地纯文本模式");
+      window.marked = {
+        parse: function(text) { return '<pre style="white-space: pre-wrap;">' + text + '</pre>'; }
+      };
+    }
+    window.addEventListener('DOMContentLoaded', () => {
+      if (typeof marked === 'undefined') loadFallbackMarked();
+    });
+  </script>
 
-    <div class="section">
-      <h3>🔑 API Key</h3>
-      <label>密钥 (x-api-key)</label>
-      <input id="apiKey" type="text" placeholder="请输入 RAGANYTHING_API_KEY" />
+  <style>
+    :root {
+      --bg-color: #f8f9fa;
+      --sidebar-width: 45vw; 
+      --border-color: #e0e0e0;
+      --user-msg-bg: #e3f2fd;
+      --bot-msg-bg: #ffffff;
+      --accent-color: #1a73e8; /* Google Blue */
+      --text-color: #333;
+    }
+
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-color);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      color: var(--text-color);
+    }
+
+    /* Header */
+    header {
+      height: 50px;
+      background: white;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .header-left { display: flex; align-items: center; gap: 15px; }
+    .header-title { font-weight: bold; font-size: 18px; }
+
+    /* Main Container */
+    .main-container { display: flex; flex: 1; overflow: hidden; }
+
+    /* Left Panel: Sources */
+    .source-panel {
+      width: var(--sidebar-width);
+      background: white;
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .source-list-header {
+      padding: 12px 15px;
+      font-weight: 600;
+      border-bottom: 1px solid #eee;
+      background: #fafafa;
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .source-list-container {
+      max-height: 25vh;
+      overflow-y: auto;
+      border-bottom: 1px solid var(--border-color);
+      background: #fff;
+      padding: 8px;
+    }
+
+    .source-item {
+      display: flex;
+      align-items: center;
+      padding: 8px 12px;
+      cursor: pointer;
+      border-radius: 6px;
+      font-size: 13px;
+      color: #444;
+      transition: background 0.2s;
+      margin-bottom: 2px;
+    }
+    .source-item:hover { background: #f1f3f4; }
+    .source-item.active { 
+      background: #e8f0fe; 
+      color: var(--accent-color); 
+      font-weight: 600; 
+    }
+    .source-icon { margin-right: 8px; font-size: 14px; opacity: 0.7; }
+
+    /* Markdown Viewer */
+    .markdown-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 25px;
+      font-size: 15px;
+      line-height: 1.7;
+      color: #333;
+      background: #fff;
+    }
+    .markdown-content h1 { border-bottom: 2px solid #eee; padding-bottom: 10px; margin-top: 0; font-size: 1.6em;}
+    .markdown-content img { max-width: 100%; border: 1px solid #eee; margin: 10px 0; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .markdown-content pre { background: #f6f8fa; padding: 15px; border-radius: 6px; overflow-x: auto; border: 1px solid #eee; }
+    .markdown-content table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 0.9em; }
+    .markdown-content th, .markdown-content td { border: 1px solid #dfe2e5; padding: 6px 13px; }
+
+    /* Chat Panel */
+    .chat-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-color);
+      min-width: 400px;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .message {
+      max-width: 85%;
+      padding: 14px 18px;
+      border-radius: 12px;
+      line-height: 1.6;
+      font-size: 15px;
+      word-wrap: break-word;
+    }
+    .message.user { align-self: flex-end; background-color: var(--user-msg-bg); border-bottom-right-radius: 2px; }
+    .message.bot { align-self: flex-start; background-color: var(--bot-msg-bg); border: 1px solid var(--border-color); border-bottom-left-radius: 2px; }
+    
+    .citation-link {
+      color: var(--accent-color);
+      cursor: pointer;
+      font-weight: bold;
+      background: rgba(26, 115, 232, 0.1);
+      padding: 0 4px;
+      border-radius: 4px;
+      font-size: 0.85em;
+    }
+
+    .input-area {
+      padding: 20px;
+      background: white;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      gap: 10px;
+    }
+    .input-area textarea {
+      flex: 1;
+      padding: 12px;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      resize: none;
+      height: 50px;
+      outline: none;
+    }
+
+    button { padding: 0 20px; border-radius: 8px; border:none; cursor: pointer; }
+    .send-btn { background: #000; color: white; font-weight: bold; }
+    .icon-btn { background: none; border: 1px solid #ccc; padding: 5px 10px; color: #555; }
+
+    @keyframes flashHighlight {
+      0% { background-color: #fff9c4; }
+      100% { background-color: transparent; }
+    }
+    .flash-active { animation: flashHighlight 1.5s ease-out; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-left">
+      <div class="header-title">📂 RAG Notebook</div>
+      <input type="password" id="apiKey" placeholder="输入 x-api-key" style="width: 120px; padding:6px; border:1px solid #ddd; border-radius:4px;" onblur="refreshWorkspaces()">
+      <button class="icon-btn" onclick="refreshWorkspaces()" title="刷新列表">↻</button>
+      <select id="workspaceSelect" onchange="loadWorkspace()" style="padding:6px; border:1px solid #ddd; border-radius:4px;">
+        <option value="">(请先输入密钥)</option>
+      </select>
     </div>
+  </header>
 
-    <div class="section">
-      <h3>📥 导入文档 (Ingest)</h3>
-      <label>文档标识 (Doc ID - 可选)</label>
-      <input id="docId" type="text" placeholder="自定义 doc_id，留空则自动生成" />
-
-      <label>选择文件</label>
-      <input id="fileInput" type="file" />
-
-      <button onclick="ingestFile()">立即导入</button>
-      <div id="ingestResult" style="margin-top: 10px; color: #555;"></div>
-    </div>
-
-    <div class="section">
-      <h3>🔍 知识问答 (Query)</h3>
-      <label>工作空间根目录</label>
-      <input id="workdirRoot" type="text" placeholder="留空则使用默认根目录" />
-      <div style="margin-top: 6px; color: #666; font-size: 12px;">
-        浏览器无法直接读取本地绝对路径，若需访问其他目录，请手动粘贴路径。
+  <div class="main-container">
+    <div class="source-panel" id="sourcePanel">
+      <div class="source-list-header">
+        <span>📁 来源文件</span>
+        <span style="font-size:12px; color:#888; font-weight:normal;">点击切换预览</span>
       </div>
-      <label>选择已有工作空间</label>
-      <select id="workspaceSelect">
-        <option value="">(请刷新列表)</option>
-      </select>
-      <button onclick="refreshWorkspaces()">刷新工作空间列表</button>
-
-      <label>当前文档 ID</label>
-      <input id="queryDocId" type="text" placeholder="待查询的 doc_id" />
-
-      <label>您的问题</label>
-      <textarea id="question" rows="4" placeholder="请描述您想从文档中了解的内容..."></textarea>
-
-      <button onclick="runQuery()">开始提问</button>
-      <h4>✨ 回答:</h4>
-      <pre id="answer">等待大王垂询...</pre>
+      <div class="source-list-container" id="fileList">
+        <div style="padding:15px; color:#999; text-align:center; font-size:13px;">请先选择工作区</div>
+      </div>
+      <div class="markdown-content" id="markdownContainer">
+        <div style="color:#999; text-align:center; margin-top:50px;">
+          <h3>👈 内容预览区</h3>
+          <p>选中上方文件以查看详情</p>
+        </div>
+      </div>
     </div>
 
-    <div class="section">
-      <h3>🧠 知识图谱可视化</h3>
-      <label>工作空间根目录</label>
-      <input id="graphWorkdirRoot" type="text" placeholder="留空则使用默认根目录" />
-      <label>选择已有工作空间</label>
-      <select id="graphWorkspaceSelect">
-        <option value="">(请刷新列表)</option>
-      </select>
-      <button onclick="refreshWorkspaces()">刷新工作空间列表</button>
-
-      <label>图谱 Doc ID</label>
-      <input id="graphDocId" type="text" placeholder="待可视化的 doc_id" />
-
-      <label>GraphML 路径（可选）</label>
-      <input
-        id="graphPath"
-        type="text"
-        placeholder="graph_chunk_entity_relation.graphml"
-      />
-
-      <button onclick="renderGraph()">打开可视化</button>
-      <div id="graphStatus" style="margin-top: 10px; color: #555;"></div>
-      <iframe id="graphFrame" class="graph-frame"></iframe>
+    <div class="chat-panel">
+      <div class="chat-messages" id="chatMessages">
+        <div style="text-align:center; color:#888; font-size:13px; margin-top:10px;">RAG 助手准备就绪</div>
+      </div>
+      <div class="input-area">
+        <textarea id="questionInput" placeholder="基于选中的工作区提问..."></textarea>
+        <button class="send-btn" onclick="sendMessage()" id="sendBtn">发送</button>
+      </div>
     </div>
+  </div>
 
-    <script>
-      // 获取用户输入的 API Key
-      function getApiKey() {
-        return document.getElementById("apiKey").value || "";
+  <script>
+    let currentDocId = "";
+    let currentFilename = "";
+
+    async function init() {
+      const key = localStorage.getItem("rag_api_key");
+      if(key) {
+        document.getElementById("apiKey").value = key;
+        await refreshWorkspaces();
       }
+    }
 
-      // 上传文档逻辑
-      async function ingestFile() {
-        const fileInput = document.getElementById("fileInput");
-        const docId = document.getElementById("docId").value;
-        const resultEl = document.getElementById("ingestResult");
-
-        if (!fileInput.files.length) {
-          resultEl.textContent = "报告大王：请先选择一个文件！";
-          return;
-        }
-
-        const form = new FormData();
-        form.append("file", fileInput.files[0]);
-        if (docId) {
-          form.append("doc_id", docId);
-        }
-
-        resultEl.textContent = "正在解析文档，请稍候...";
-        
-        try {
-          const resp = await fetch("/ingest", {
-            method: "POST",
-            headers: { "x-api-key": getApiKey() },
-            body: form,
-          });
-
-          const data = await resp.json();
-          resultEl.textContent = resp.ok
-            ? `✅ 导入成功！Doc ID: ${data.doc_id}`
-            : `❌ 失败: ${data.detail || JSON.stringify(data)}`;
-          
-          if (resp.ok) {
-            document.getElementById("queryDocId").value = data.doc_id;
-            refreshWorkspaces(); // 成功后顺便刷新列表
-          }
-        } catch (e) {
-          resultEl.textContent = "❌ 网络异常，请检查服务器连接。";
-        }
-      }
-
-      // 查询逻辑
-      async function runQuery() {
-        const docId = document.getElementById("queryDocId").value;
-        const question = document.getElementById("question").value;
-        const answerEl = document.getElementById("answer");
-
-        if (!docId || !question) {
-          answerEl.textContent = "报告大王：Doc ID 和问题都不能为空！";
-          return;
-        }
-
-        answerEl.textContent = "正在思考中... 🤔";
-
-        try {
-          const resp = await fetch("/query", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-api-key": getApiKey(),
-            },
-            body: JSON.stringify({
-              doc_id: docId,
-              query: question,
-            }),
-          });
-
-          const data = await resp.json();
-          answerEl.textContent = resp.ok
-            ? data.answer
-            : `❌ 错误: ${data.detail || JSON.stringify(data)}`;
-        } catch (e) {
-          answerEl.textContent = "❌ 连接后端失败。";
-        }
-      }
-
-      // 图谱可视化逻辑
-      async function renderGraph() {
-        const docId = document.getElementById("graphDocId").value;
-        const graphPath = document.getElementById("graphPath").value;
-        const frame = document.getElementById("graphFrame");
-        const statusEl = document.getElementById("graphStatus");
-
-        if (!docId) {
-          statusEl.textContent = "报告大王：Doc ID 不能为空！";
-          return;
-        }
-
-        const params = new URLSearchParams({ doc_id: docId });
-        if (graphPath) params.set("graph_path", graphPath);
-
-        statusEl.textContent = "正在生成图谱，请稍候...";
-        frame.srcdoc = "";
-
-        try {
-          const resp = await fetch(`/graph?${params.toString()}`, {
-            headers: { "x-api-key": getApiKey() },
-          });
-          const html = await resp.text();
-          if (!resp.ok) {
-            statusEl.textContent = `❌ 失败: ${html}`;
-            return;
-          }
-          frame.srcdoc = html;
-          statusEl.textContent = "✅ 图谱已加载";
-        } catch (e) {
-          statusEl.textContent = "❌ 网络异常，请检查服务器连接。";
-        }
-      }
-
-      // 刷新列表逻辑
-      async function refreshWorkspaces() {
+    async function refreshWorkspaces() {
+      const apiKey = document.getElementById("apiKey").value;
+      if(!apiKey) return;
+      localStorage.setItem("rag_api_key", apiKey);
+      try {
+        const resp = await fetch("/workspaces", { headers: { "x-api-key": apiKey } });
+        const data = await resp.json();
         const select = document.getElementById("workspaceSelect");
-        const graphSelect = document.getElementById("graphWorkspaceSelect");
-        const rootInput = document.getElementById("workdirRoot");
-        const graphRootInput = document.getElementById("graphWorkdirRoot");
-        select.innerHTML = "<option value=''>加载中...</option>";
-        graphSelect.innerHTML = "<option value=''>加载中...</option>";
+        select.innerHTML = "<option value=''>-- 选择工作区 --</option>";
+        data.workspaces.forEach(ws => {
+          const opt = document.createElement("option");
+          opt.value = ws.doc_id;
+          opt.textContent = ws.doc_id;
+          select.appendChild(opt);
+        });
+      } catch(e) { console.error(e); }
+    }
 
-        try {
-          const rootValue = rootInput.value.trim();
-          const url = rootValue
-            ? `/workspaces?root=${encodeURIComponent(rootValue)}`
-            : "/workspaces";
-          const resp = await fetch(url, {
-            headers: { "x-api-key": getApiKey() },
-          });
-          const data = await resp.json();
-          
-          if (!resp.ok) {
-            select.innerHTML = "<option value=''>无法加载，请检查密钥</option>";
-            graphSelect.innerHTML = "<option value=''>无法加载，请检查密钥</option>";
-            return;
-          }
+    async function loadWorkspace() {
+      const docId = document.getElementById("workspaceSelect").value;
+      if(!docId) return;
+      currentDocId = docId;
+      const fileListEl = document.getElementById("fileList");
+      fileListEl.innerHTML = "正在加载...";
+      try {
+        const apiKey = document.getElementById("apiKey").value;
+        const resp = await fetch(`/files/${docId}`, { headers: { "x-api-key": apiKey } });
+        const data = await resp.json();
+        fileListEl.innerHTML = "";
+        data.files.forEach((file, index) => {
+          const div = document.createElement("div");
+          div.className = "source-item";
+          div.innerHTML = `<span class="source-icon">📄</span> ${file}`;
+          div.onclick = () => loadFileContent(file, div);
+          fileListEl.appendChild(div);
+          if (index === 0) loadFileContent(file, div);
+        });
+      } catch(e) { fileListEl.innerHTML = "加载失败"; }
+    }
 
-          if (data.workdir_root) {
-            rootInput.placeholder = data.workdir_root;
-            if (!graphRootInput.value.trim()) {
-              graphRootInput.placeholder = data.workdir_root;
-            }
-          }
+    async function loadFileContent(filename, element) {
+      document.querySelectorAll(".source-item").forEach(el => el.classList.remove("active"));
+      if(element) element.classList.add("active");
+      currentFilename = filename;
+      const container = document.getElementById("markdownContainer");
+      try {
+        const apiKey = document.getElementById("apiKey").value;
+        const resp = await fetch(`/content/${currentDocId}?filename=${encodeURIComponent(filename)}`, { 
+            headers: { "x-api-key": apiKey } 
+        });
+        const data = await resp.json();
+        container.innerHTML = marked.parse(data.content);
+      } catch(e) { container.innerHTML = "预览加载失败"; }
+    }
 
-          const options = data.workspaces || [];
-          if (!options.length) {
-            select.innerHTML = "<option value=''>暂无工作空间</option>";
-            graphSelect.innerHTML = "<option value=''>暂无工作空间</option>";
-            return;
-          }
+    async function sendMessage() {
+      const text = document.getElementById("questionInput").value.trim();
+      if(!text || !currentDocId) return;
+      const apiKey = document.getElementById("apiKey").value;
+      addMessage("user", text);
+      document.getElementById("questionInput").value = "";
+      const loadingId = addMessage("bot", "思考中...");
+      try {
+        const resp = await fetch("/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+          body: JSON.stringify({ doc_id: currentDocId, query: text })
+        });
+        const data = await resp.json();
+        removeMessage(loadingId);
+        let answer = marked.parse(data.answer);
+        answer = answer.replace(/\[([a-zA-Z0-9_\-\.\s:]+)\]/g, (match, content) => {
+            let cleanId = content.replace(/^Source:\s*/i, '').trim();
+            return `<span class="citation-link" onclick="scrollToReference('${cleanId}')">${match}</span>`;
+        });
+        addMessage("bot", answer, true);
+      } catch(e) { addMessage("bot", "Error: " + e.message); }
+    }
 
-          select.innerHTML = "<option value=''>-- 请选择 --</option>";
-          graphSelect.innerHTML = "<option value=''>-- 请选择 --</option>";
-          options.forEach(item => {
-            const opt = document.createElement("option");
-            opt.value = item.doc_id;
-            opt.textContent = `${item.doc_id} (更新于: ${item.updated_at})`;
-            select.appendChild(opt);
-            graphSelect.appendChild(opt.cloneNode(true));
-          });
+    function addMessage(role, content, isHtml=false) {
+      const div = document.createElement("div");
+      div.className = `message ${role}`;
+      div.id = "msg-" + Date.now();
+      if(isHtml) div.innerHTML = content; else div.textContent = content;
+      document.getElementById("chatMessages").appendChild(div);
+      return div.id;
+    }
+    
+    function removeMessage(id) { document.getElementById(id)?.remove(); }
 
-          select.onchange = () => {
-            if (select.value) document.getElementById("queryDocId").value = select.value;
-          };
-          graphSelect.onchange = () => {
-            if (graphSelect.value) document.getElementById("graphDocId").value = graphSelect.value;
-          };
-          graphRootInput.value = rootInput.value;
-        } catch (e) {
-          select.innerHTML = "<option value=''>网络连接失败</option>";
-          graphSelect.innerHTML = "<option value=''>网络连接失败</option>";
+    window.scrollToReference = function(refId) {
+      const panel = document.getElementById('sourcePanel');
+      const items = document.querySelectorAll(".source-item");
+      for(let item of items) {
+        if (item.textContent.includes(refId) || refId.includes(item.textContent.trim())) {
+          item.click();
+          break;
         }
       }
-
-      // 页面加载时尝试获取列表
-      refreshWorkspaces();
-    </script>
-  </body>
+      panel.classList.remove('flash-active');
+      void panel.offsetWidth; 
+      panel.classList.add('flash-active');
+    }
+    init();
+  </script>
+</body>
 </html>

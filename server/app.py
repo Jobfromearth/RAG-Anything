@@ -1,8 +1,8 @@
 import os
-from datetime import datetime
+import json
 from pathlib import Path
-from typing import Optional
-import random
+from typing import Optional, Set
+import glob
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
@@ -22,7 +22,39 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="RAGAnything Local Service")
 _service: Optional[LocalRagService] = None
 
-# --- 依赖注入函数 ---
+# --- [核心逻辑 1] 强制在 hybrid_auto 中查找文件 ---
+def _find_md_in_hybrid_auto(filename: str) -> Path:
+    """
+    不管 doc_id 是什么，直接在 output 下的所有子目录里的 hybrid_auto 文件夹找文件。
+    路径模式: output / * / hybrid_auto / filename
+    """
+    settings = LocalRagSettings.from_env()
+    output_root = Path(settings.output_dir).resolve()
+    
+    if not output_root.exists():
+        raise HTTPException(status_code=500, detail="Output root directory does not exist")
+
+    # 1. 构造 Glob 模式：找任意子文件夹下的 hybrid_auto 目录下的该文件
+    # 模式: */hybrid_auto/filename
+    pattern = f"*/hybrid_auto/{filename}"
+    
+    candidates = list(output_root.glob(pattern))
+    
+    if candidates:
+        return candidates[0]
+    
+    # 2. 如果没找到，尝试模糊匹配 (比如大小写问题)
+    fuzzy_pattern = f"*/hybrid_auto/*{filename}*"
+    candidates = list(output_root.glob(fuzzy_pattern))
+    
+    # 过滤 .md
+    md_candidates = [p for p in candidates if p.suffix.lower() == '.md']
+    if md_candidates:
+        return md_candidates[0]
+
+    raise HTTPException(status_code=404, detail=f"File '{filename}' not found in any 'hybrid_auto' folder.")
+
+# --- 依赖注入 ---
 def get_service() -> LocalRagService:
     global _service
     if _service is None:
@@ -32,8 +64,7 @@ def get_service() -> LocalRagService:
 
 def verify_api_key(x_api_key: Optional[str] = Header(default=None)):
     expected = os.getenv(API_KEY_ENV, "").strip()
-    if not expected:
-        return
+    if not expected: return
     if x_api_key != expected:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
@@ -47,12 +78,59 @@ class QueryRequest(BaseModel):
     enable_rerank: bool = True
     vlm_enhanced: bool = True
 
-# --- 路由接口 ---
+# --- 路由 ---
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    """渲染首页"""
     return TEMPLATES.TemplateResponse("index.html", {"request": request})
+
+# --- [核心逻辑 2] 列出所有 hybrid_auto 下的 md 文件 ---
+@app.get("/files/{doc_id}")
+def list_workspace_files(doc_id: str, _auth: None = Depends(verify_api_key)):
+    """
+    忽略 doc_id 参数！
+    直接扫描 /output/ 下所有符合 */hybrid_auto/*.md 结构的文件。
+    """
+    settings = LocalRagSettings.from_env()
+    output_root = Path(settings.output_dir).resolve()
+    
+    file_list = set()
+    
+    if output_root.exists():
+        # 核心：使用 glob 扫描两层目录下的 hybrid_auto
+        md_files = list(output_root.glob("*/hybrid_auto/*.md"))
+        
+        for p in md_files:
+            file_list.add(p.name)
+
+    # 排序返回
+    return {"files": sorted(list(file_list))}
+
+# --- [核心逻辑 3] 获取内容 ---
+@app.get("/content/{doc_id}")
+async def get_document_content(
+    doc_id: str, 
+    filename: Optional[str] = None,
+    _auth: None = Depends(verify_api_key)
+):
+    # 如果前端没传 filename，自动取列表里的第一个
+    if not filename or filename == "undefined":
+        files_resp = list_workspace_files(doc_id, _auth)
+        files = files_resp["files"]
+        if files:
+            filename = files[0]
+        else:
+            raise HTTPException(status_code=404, detail="No processed .md files found in output directory.")
+
+    try:
+        # 使用强制 hybrid_auto 查找逻辑
+        md_path = _find_md_in_hybrid_auto(filename)
+        content = md_path.read_text(encoding="utf-8")
+        return {"content": content, "filename": md_path.name}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Load failed: {str(e)}")
 
 @app.post("/ingest")
 async def ingest(
@@ -61,13 +139,11 @@ async def ingest(
     _auth: None = Depends(verify_api_key),
     service: LocalRagService = Depends(get_service),
 ):
-    """上传并处理文档"""
     file_path = UPLOAD_DIR / file.filename
     content = await file.read()
     file_path.write_bytes(content)
-
-    doc_id = await service.ingest(str(file_path), doc_id=doc_id)
-    return {"doc_id": doc_id}
+    final_id = await service.ingest(str(file_path), doc_id=doc_id)
+    return {"doc_id": final_id}
 
 @app.post("/query")
 async def query(
@@ -75,7 +151,6 @@ async def query(
     _auth: None = Depends(verify_api_key),
     service: LocalRagService = Depends(get_service),
 ):
-    """执行 RAG 查询"""
     result = await service.query(
         payload.doc_id,
         payload.query,
@@ -87,111 +162,13 @@ async def query(
     )
     return {"answer": result}
 
-@app.get("/health")
-def health():
-    """健康检查"""
-    return {"status": "ok"}
-
-def _resolve_workspace_root(root: Optional[str]) -> Path:
-    settings = LocalRagSettings.from_env()
-    if root:
-        candidate = Path(root).expanduser()
-        if not candidate.is_absolute():
-            candidate = (Path.cwd() / candidate).resolve()
-        else:
-            candidate = candidate.resolve()
-    else:
-        candidate = Path(settings.working_dir_root).resolve()
-
-    if not candidate.exists() or not candidate.is_dir():
-        raise HTTPException(status_code=400, detail="Workspace root not found.")
-    return candidate
-
-
-def _list_workspaces(root: Path) -> list[dict]:
-    """获取本地所有工作空间（文档库）"""
-    items = []
-    for entry in root.iterdir():
-        if not entry.is_dir():
-            continue
-        try:
-            stat = entry.stat()
-        except OSError:
-            continue
-        items.append(
-            {
-                "doc_id": entry.name,
-                "path": str(entry.resolve()),
-                "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            }
-        )
-    items.sort(key=lambda x: x["updated_at"], reverse=True)
-    return items
-
-def _resolve_graph_path(doc_id: str, graph_path: Optional[str]) -> Path:
-    settings = LocalRagSettings.from_env()
-    base = Path(settings.working_dir_root).resolve()
-    if graph_path:
-        raw_path = Path(graph_path)
-        if raw_path.is_absolute():
-            candidate = raw_path.resolve()
-        else:
-            candidate = (base / doc_id / raw_path).resolve()
-    else:
-        candidate = (base / doc_id / "graph_chunk_entity_relation.graphml").resolve()
-
-    if base != candidate and base not in candidate.parents:
-        raise HTTPException(status_code=400, detail="Graph path is not allowed.")
-    return candidate
-
 @app.get("/workspaces")
-def list_workspaces(
-    root: Optional[str] = None,
-    _auth: None = Depends(verify_api_key),
-):
-    """工作空间列表 API"""
-    resolved_root = _resolve_workspace_root(root)
-    return {
-        "workdir_root": str(resolved_root),
-        "workspaces": _list_workspaces(resolved_root),
-    }
-
-@app.get("/graph", response_class=HTMLResponse)
-def show_graph(
-    doc_id: str,
-    graph_path: Optional[str] = None,
-    _auth: None = Depends(verify_api_key),
-):
-    """知识图谱可视化 HTML"""
-    graph_file = _resolve_graph_path(doc_id, graph_path)
-    if not graph_file.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"GraphML not found: {graph_file}",
-        )
-
-    try:
-        import networkx as nx
-        from pyvis.network import Network
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Missing dependency: {exc}",
-        )
-
-    graph = nx.read_graphml(str(graph_file))
-    net = Network(height="100vh", width="100%", notebook=False)
-    net.from_nx(graph)
-
-    for node in net.nodes:
-        node["color"] = "#{:06x}".format(random.randint(0, 0xFFFFFF))
-        description = node.get("description")
-        if description:
-            node["title"] = description
-
-    for edge in net.edges:
-        description = edge.get("description")
-        if description:
-            edge["title"] = description
-
-    return HTMLResponse(net.generate_html())
+def list_workspaces(_auth: None = Depends(verify_api_key)):
+    settings = LocalRagSettings.from_env()
+    root = Path(settings.working_dir_root).resolve()
+    items = []
+    if root.exists():
+        for entry in root.iterdir():
+            if entry.is_dir():
+                items.append({"doc_id": entry.name})
+    return {"workdir_root": str(root), "workspaces": items}
