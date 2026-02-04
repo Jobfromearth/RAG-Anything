@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -8,7 +8,7 @@
   <script src="https://unpkg.com/marked@4.3.0/marked.min.js" onerror="loadFallbackMarked()"></script>
   <script>
     function loadFallbackMarked() {
-      console.warn("CDN 加载失败，启用本地纯文本模式");
+      console.warn("CDN load failed, using plain text mode");
       window.marked = {
         parse: function(text) { return '<pre style="white-space: pre-wrap;">' + text + '</pre>'; }
       };
@@ -179,22 +179,6 @@
     button { padding: 0 20px; border-radius: 8px; border:none; cursor: pointer; }
     .send-btn { background: #000; color: white; font-weight: bold; }
     .icon-btn { background: none; border: 1px solid #ccc; padding: 5px 10px; color: #555; }
-    .query-params {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      font-size: 12px;
-      color: #555;
-      white-space: nowrap;
-    }
-    .query-params input {
-      width: 70px;
-      padding: 4px 6px;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      font-size: 12px;
-    }
-
     @keyframes flashHighlight {
       0% { background-color: #fff9c4; }
       100% { background-color: transparent; }
@@ -207,10 +191,10 @@
   <header>
     <div class="header-left">
       <div class="header-title">📂 RAG Notebook</div>
-      <input type="password" id="apiKey" placeholder="输入 x-api-key" style="width: 120px; padding:6px; border:1px solid #ddd; border-radius:4px;" onblur="refreshWorkspaces()">
-      <button class="icon-btn" onclick="refreshWorkspaces()" title="刷新列表">↻</button>
+      <input type="password" id="apiKey" placeholder="Enter x-api-key" style="width: 120px; padding:6px; border:1px solid #ddd; border-radius:4px;">
+      <button class="icon-btn" onclick="refreshWorkspaces()" title="Refresh">↻</button>
       <select id="workspaceSelect" onchange="loadWorkspace()" style="padding:6px; border:1px solid #ddd; border-radius:4px;">
-        <option value="">(请先输入密钥)</option>
+        <option value="">(Enter API key)</option>
       </select>
     </div>
   </header>
@@ -218,31 +202,27 @@
   <div class="main-container">
     <div class="source-panel" id="sourcePanel">
       <div class="source-list-header">
-        <span>📁 来源文件</span>
-        <span style="font-size:12px; color:#888; font-weight:normal;">点击切换预览</span>
+        <span>📁 Source Files</span>
+        <span style="font-size:12px; color:#888; font-weight:normal;">Click to preview</span>
       </div>
       <div class="source-list-container" id="fileList">
-        <div style="padding:15px; color:#999; text-align:center; font-size:13px;">请先选择工作区</div>
+        <div style="padding:15px; color:#999; text-align:center; font-size:13px;">Select a workspace</div>
       </div>
       <div class="markdown-content" id="markdownContainer">
         <div style="color:#999; text-align:center; margin-top:50px;">
-          <h3>👈 内容预览区</h3>
-          <p>选中上方文件以查看详情</p>
+          <h3>👈 Preview</h3>
+          <p>Select a file above to view</p>
         </div>
       </div>
     </div>
 
     <div class="chat-panel">
       <div class="chat-messages" id="chatMessages">
-        <div style="text-align:center; color:#888; font-size:13px; margin-top:10px;">RAG 助手准备就绪</div>
+        <div style="text-align:center; color:#888; font-size:13px; margin-top:10px;">RAG assistant ready</div>
       </div>
       <div class="input-area">
-        <textarea id="questionInput" placeholder="基于选中的工作区提问..."></textarea>
-        <div class="query-params">
-          <label>top_k <input type="number" id="topKInput" min="1" max="50" value="15"></label>
-          <label>chunk_k <input type="number" id="chunkTopKInput" min="1" max="80" value="30"></label>
-        </div>
-        <button class="send-btn" onclick="sendMessage()" id="sendBtn">发送</button>
+        <textarea id="questionInput" placeholder="Ask about the selected workspace..."></textarea>
+        <button class="send-btn" onclick="sendMessage()" id="sendBtn">Send</button>
       </div>
     </div>
   </div>
@@ -250,44 +230,101 @@
   <script>
     let currentDocId = "";
     let currentFilename = "";
+    let messageSeq = 0;
+
+    function setWorkspacePlaceholder(text, disabled = true) {
+      const select = document.getElementById("workspaceSelect");
+      select.innerHTML = `<option value="">${text}</option>`;
+      select.disabled = disabled;
+    }
+
+    function resetWorkspaceView(fileListText = "Select a workspace") {
+      currentDocId = "";
+      currentFilename = "";
+      document.getElementById("fileList").innerHTML = `<div style="padding:15px; color:#999; text-align:center; font-size:13px;">${fileListText}</div>`;
+      document.getElementById("markdownContainer").innerHTML = `
+        <div style="color:#999; text-align:center; margin-top:50px;">
+          <h3>👈 Preview</h3>
+          <p>Select a file above to view</p>
+        </div>
+      `;
+    }
 
     async function init() {
-      const key = localStorage.getItem("rag_api_key");
-      if(key) {
-        document.getElementById("apiKey").value = key;
-        await refreshWorkspaces();
-      }
+      setWorkspacePlaceholder("(Enter API key)");
+      resetWorkspaceView();
+      const questionInput = document.getElementById("questionInput");
+      questionInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          sendMessage();
+        }
+      });
     }
 
     async function refreshWorkspaces() {
-      const apiKey = document.getElementById("apiKey").value;
-      if(!apiKey) return;
-      localStorage.setItem("rag_api_key", apiKey);
+      const apiKey = document.getElementById("apiKey").value.trim();
+      if (!apiKey) {
+        setWorkspacePlaceholder("(Enter API key)");
+        resetWorkspaceView("Select a workspace");
+        return;
+      }
+      resetWorkspaceView("Select a workspace");
+      setWorkspacePlaceholder("Loading...", true);
       try {
         const resp = await fetch("/workspaces", { headers: { "x-api-key": apiKey } });
+        if (!resp.ok) {
+          const label = resp.status === 401 ? "Invalid API key" : `Request failed (${resp.status})`;
+          setWorkspacePlaceholder(label);
+          return;
+        }
         const data = await resp.json();
         const select = document.getElementById("workspaceSelect");
-        select.innerHTML = "<option value=''>-- 选择工作区 --</option>";
+        if (!data.workspaces || data.workspaces.length === 0) {
+          setWorkspacePlaceholder("No workspaces found");
+          return;
+        }
+        select.innerHTML = "<option value=''>-- Select workspace --</option>";
         data.workspaces.forEach(ws => {
           const opt = document.createElement("option");
           opt.value = ws.doc_id;
           opt.textContent = ws.doc_id;
           select.appendChild(opt);
         });
-      } catch(e) { console.error(e); }
+        select.disabled = false;
+      } catch(e) {
+        setWorkspacePlaceholder("Failed to load workspaces");
+        console.error(e);
+      }
     }
 
     async function loadWorkspace() {
+      const apiKey = document.getElementById("apiKey").value.trim();
       const docId = document.getElementById("workspaceSelect").value;
-      if(!docId) return;
+      if (!apiKey) {
+        setWorkspacePlaceholder("Enter API key");
+        resetWorkspaceView("Select a workspace");
+        return;
+      }
+      if(!docId) {
+        resetWorkspaceView("Select a workspace");
+        return;
+      }
       currentDocId = docId;
       const fileListEl = document.getElementById("fileList");
-      fileListEl.innerHTML = "正在加载...";
+      fileListEl.innerHTML = "Loading...";
       try {
-        const apiKey = document.getElementById("apiKey").value;
         const resp = await fetch(`/files/${docId}`, { headers: { "x-api-key": apiKey } });
+        if (!resp.ok) {
+          fileListEl.innerHTML = "Failed to load files";
+          return;
+        }
         const data = await resp.json();
         fileListEl.innerHTML = "";
+        if (!data.files || data.files.length === 0) {
+          fileListEl.innerHTML = "No files found in this workspace";
+          return;
+        }
         data.files.forEach((file, index) => {
           const div = document.createElement("div");
           div.className = "source-item";
@@ -296,7 +333,7 @@
           fileListEl.appendChild(div);
           if (index === 0) loadFileContent(file, div);
         });
-      } catch(e) { fileListEl.innerHTML = "加载失败"; }
+      } catch(e) { fileListEl.innerHTML = "Failed to load files"; }
     }
 
     async function loadFileContent(filename, element) {
@@ -305,35 +342,45 @@
       currentFilename = filename;
       const container = document.getElementById("markdownContainer");
       try {
-        const apiKey = document.getElementById("apiKey").value;
+        const apiKey = document.getElementById("apiKey").value.trim();
+        if (!apiKey || !currentDocId) return;
         const resp = await fetch(`/content/${currentDocId}?filename=${encodeURIComponent(filename)}`, { 
             headers: { "x-api-key": apiKey } 
         });
+        if (!resp.ok) {
+          container.innerHTML = "Preview failed to load";
+          return;
+        }
         const data = await resp.json();
         container.innerHTML = marked.parse(data.content);
-      } catch(e) { container.innerHTML = "预览加载失败"; }
+      } catch(e) { container.innerHTML = "Preview failed to load"; }
     }
 
     async function sendMessage() {
       const text = document.getElementById("questionInput").value.trim();
       if(!text || !currentDocId) return;
-      const apiKey = document.getElementById("apiKey").value;
-      const topK = parseInt(document.getElementById("topKInput").value, 10) || 15;
-      const chunkTopK = parseInt(document.getElementById("chunkTopKInput").value, 10) || 30;
+      const apiKey = document.getElementById("apiKey").value.trim();
+      if (!apiKey) {
+        addMessage("bot", "API key required. Please enter a valid key.");
+        return;
+      }
       addMessage("user", text);
       document.getElementById("questionInput").value = "";
-      const loadingId = addMessage("bot", "思考中...");
+      const loadingId = addMessage("bot", "Thinking...");
       try {
         const resp = await fetch("/query", {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-api-key": apiKey },
           body: JSON.stringify({
             doc_id: currentDocId,
-            query: text,
-            top_k: topK,
-            chunk_top_k: chunkTopK
+            query: text
           })
         });
+        if (!resp.ok) {
+          removeMessage(loadingId);
+          addMessage("bot", `Request failed (${resp.status})`);
+          return;
+        }
         const data = await resp.json();
         removeMessage(loadingId);
         let answer = marked.parse(data.answer);
@@ -348,7 +395,8 @@
     function addMessage(role, content, isHtml=false) {
       const div = document.createElement("div");
       div.className = `message ${role}`;
-      div.id = "msg-" + Date.now();
+      messageSeq += 1;
+      div.id = `msg-${messageSeq}-${Date.now()}`;
       if(isHtml) div.innerHTML = content; else div.textContent = content;
       document.getElementById("chatMessages").appendChild(div);
       return div.id;
