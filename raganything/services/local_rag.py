@@ -1,5 +1,9 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 """
+RAG-Anything Local Multimodal Pipeline (Optimized Version)
+
 新开图谱 (处理整个文件夹)：
 python raganything/services/local_rag.py -p ./data/my_paper_folder -i My_New_Graph
 
@@ -16,7 +20,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import numpy as np
 from lightrag.utils import EmbeddingFunc
@@ -30,8 +34,8 @@ _MODEL_CACHE: Dict[str, Any] = {}
 
 @dataclass
 class LocalRagSettings:
-    tiktoken_cache_dir: str =  "/data/h50056787/workspaces/lightrag/tiktoken_cache"
-    embedding_model_path: str =  "/data/h50056787/models/bge-m3"
+    tiktoken_cache_dir: str = "/data/h50056787/workspaces/lightrag/tiktoken_cache"
+    embedding_model_path: str = "/data/h50056787/models/bge-m3"
     rerank_model_path: str = "/data/h50056787/models/bge-reranker-v2-m3"
 
     working_dir_root: str = "./rag_workspace"
@@ -44,12 +48,25 @@ class LocalRagSettings:
     device: str = "cuda:0"
 
     embedding_dim: int = 1024
+    
+    # Embedding 模型限制
     max_token_size: int = 8192
-    temperature: float = 0.1
-    max_tokens: int = 1024
+    
+    # 实体抽取时的参数 (强制严谨)
+    temperature: float = 0.0
+    max_tokens: int = 8192  # 调大以防 Relation 被截断
+    
+    # 问答时的参数
     vision_max_tokens: int = 2048
-    vlm_max_images: int = 5
-    vlm_max_text_chars: int = 12000
+    vlm_max_images: int = 10
+    
+    # 【改动】大幅放宽字符限制 (Qwen2-VL 支持 32k tokens, 约 5-6w chars)
+    vlm_max_text_chars: int = 30000 
+    
+    # 【新增】LightRAG 切片配置 (防止 Over-extraction)
+    chunk_token_size: int = 600
+    chunk_overlap_token_size: int = 100
+
     base_system_prompt: str = (
         "You are Qwen2-VL, an expert multimodal AI assistant. "
         "1. First, analyze ALL images provided at the start. "
@@ -68,32 +85,25 @@ class LocalRagSettings:
     def from_env(cls) -> "LocalRagSettings":
         return cls(
             tiktoken_cache_dir=os.getenv("TIKTOKEN_CACHE_DIR", "/data/h50056787/workspaces/lightrag/tiktoken_cache"),
-            embedding_model_path=os.getenv(
-                "RAGANYTHING_EMBEDDING_MODEL_PATH", "/data/h50056787/models/bge-m3"
-            ),
-            rerank_model_path=os.getenv(
-                "RAGANYTHING_RERANK_MODEL_PATH", "/data/h50056787/models/bge-reranker-v2-m3"
-            ),
+            embedding_model_path=os.getenv("RAGANYTHING_EMBEDDING_MODEL_PATH", "/data/h50056787/models/bge-m3"),
+            rerank_model_path=os.getenv("RAGANYTHING_RERANK_MODEL_PATH", "/data/h50056787/models/bge-reranker-v2-m3"),
             log_dir=os.getenv("RAGANYTHING_LOG_DIR", "./logs"),
             vllm_api_base=os.getenv("VLLM_API_BASE", "http://localhost:8001/v1"),
             vllm_api_key=os.getenv("VLLM_API_KEY", "EMPTY"),
-            llm_model_name=os.getenv(
-                "LLM_MODEL_NAME", "Qwen/Qwen2-VL-7B-Instruct"
-            ),
+            llm_model_name=os.getenv("LLM_MODEL_NAME", "Qwen/Qwen2-VL-7B-Instruct"),
             device=os.getenv("RAGANYTHING_DEVICE", "cuda:0"),
             working_dir_root=os.getenv("RAGANYTHING_WORKDIR_ROOT", "./rag_workspace"),
             output_dir=os.getenv("RAGANYTHING_OUTPUT_DIR", "./output"),
             embedding_dim=int(os.getenv("RAGANYTHING_EMBEDDING_DIM", "1024")),
             max_token_size=int(os.getenv("RAGANYTHING_MAX_TOKEN_SIZE", "8192")),
-            temperature=float(os.getenv("RAGANYTHING_TEMPERATURE", "0.1")),
-            max_tokens=int(os.getenv("RAGANYTHING_MAX_TOKENS", "4096")),
+            temperature=float(os.getenv("RAGANYTHING_TEMPERATURE", "0.0")),
+            max_tokens=int(os.getenv("RAGANYTHING_MAX_TOKENS", "8192")),
             vision_max_tokens=int(os.getenv("RAGANYTHING_VISION_MAX_TOKENS", "2048")),
-            vlm_max_images=int(os.getenv("RAGANYTHING_VLM_MAX_IMAGES", "5")),
-            vlm_max_text_chars=int(os.getenv("RAGANYTHING_VLM_MAX_TEXT_CHARS", "12000")),
-            base_system_prompt=os.getenv(
-                "RAGANYTHING_BASE_SYSTEM_PROMPT",
-                cls().base_system_prompt,
-            ),
+            vlm_max_images=int(os.getenv("RAGANYTHING_VLM_MAX_IMAGES", "10")),
+            vlm_max_text_chars=int(os.getenv("RAGANYTHING_VLM_MAX_TEXT_CHARS", "30000")),
+            chunk_token_size=int(os.getenv("RAGANYTHING_CHUNK_SIZE", "600")),
+            chunk_overlap_token_size=int(os.getenv("RAGANYTHING_CHUNK_OVERLAP", "100")),
+            base_system_prompt=os.getenv("RAGANYTHING_BASE_SYSTEM_PROMPT", cls().base_system_prompt),
         )
 
 
@@ -243,16 +253,9 @@ def build_vision_model_func(
             if k not in ["hashing_kv", "keyword_extraction", "enable_cot"]
         }
 
+        # === 场景 1: RAG 问答阶段 (消息组装 - 动态装箱 Best Fit Strategy) ===
         if messages:
-            def _truncate_text(text: str, max_chars: int) -> str:
-                if max_chars <= 0:
-                    return ""
-                if len(text) <= max_chars:
-                    return text
-                if max_chars <= 20:
-                    return text[-max_chars:]
-                return f"[...truncated...]\n{text[-(max_chars - 15):]}"
-
+            # 1. 提取系统提示词
             original_sys = next(
                 (m["content"] for m in messages if m["role"] == "system"), ""
             )
@@ -261,6 +264,7 @@ def build_vision_model_func(
                 f"{original_sys}"
             )
 
+            # 2. 解析原始 messages，分离出用户输入、图片、和检索到的上下文
             user_content_list = []
             for msg in messages:
                 if msg["role"] == "user":
@@ -271,71 +275,81 @@ def build_vision_model_func(
                             {"type": "text", "text": str(msg["content"])}
                         )
 
+            # 找到最后一个由用户输入的 Query (通常在列表末尾)
             last_text_idx = None
             for idx, item in enumerate(user_content_list):
                 if item.get("type") == "text":
                     last_text_idx = idx
 
-            max_images = max(settings.vlm_max_images, 0)
-            max_text_chars = max(settings.vlm_max_text_chars, 0)
-
             query_text = ""
             if last_text_idx is not None:
                 query_text = str(user_content_list[last_text_idx].get("text", ""))
-            remaining_chars = max_text_chars - len(query_text)
-            if remaining_chars < 0:
-                remaining_chars = 0
 
-            selected_reversed = []
+            # 3. 准备容器和预算
+            final_content = []
+            
+            # 先加入 Query (必须保留)
+            if query_text:
+                final_content.append({"type": "text", "text": query_text})
+            
+            # 加入图片 (必须保留) - 限制数量
+            max_images = max(settings.vlm_max_images, 0)
             images_used = 0
+            for item in user_content_list:
+                if item.get("type") == "image_url":
+                    if images_used < max_images:
+                        final_content.insert(0, item) # 图片放前面
+                        images_used += 1
 
-            for i in range(len(user_content_list) - 1, -1, -1):
-                item = user_content_list[i]
-                item_type = item.get("type")
-                if item_type == "image_url":
-                    if images_used >= max_images:
-                        continue
-                    images_used += 1
-                    selected_reversed.append(item)
-                    continue
+            # 4. 动态装箱上下文 (Best Fit)
+            # 计算剩余给上下文的字符空间
+            # 粗略估计：总额度 - Query长度 - 图片预估(虽然图片不算char但为了安全)
+            max_chars_limit = settings.vlm_max_text_chars
+            current_chars = len(query_text)
+            
+            # 提取所有上下文 Chunks (除了 query 之外的文本)
+            context_chunks = []
+            for i, item in enumerate(user_content_list):
+                if item.get("type") == "text" and i != last_text_idx:
+                    context_chunks.append(item.get("text", ""))
 
-                if item_type != "text":
-                    continue
+            # 假设 context_chunks 已经是按 Rerank 分数排序的 (LightRAG 默认行为)
+            # 我们正序遍历，能装下就装，装不下就停 (或者跳过大的装小的，这里简化为填满即止)
+            
+            valid_contexts = []
+            for chunk in context_chunks:
+                chunk_len = len(chunk)
+                if current_chars + chunk_len < max_chars_limit:
+                    valid_contexts.append(chunk)
+                    current_chars += chunk_len
+                else:
+                    # 空间满了，停止装入。不再截断单个chunk，保证完整性。
+                    break
+            
+            # 将选中的上下文插到 Query 之前，图片之后
+            # 注意：LightRAG 习惯将上下文放在 Query 之前
+            # 我们逆序插入，保持分数高的离 Query 近，或者正序插入
+            # 这里选择：分数高的(list前排)放在离 Query 最近的地方 -> 倒序插入
+            for chunk in reversed(valid_contexts):
+                final_content.insert(0, {"type": "text", "text": chunk})
 
-                if i == last_text_idx:
-                    if query_text:
-                        selected_reversed.append({"type": "text", "text": query_text})
-                    continue
-
-                if remaining_chars <= 0:
-                    continue
-                raw_text = str(item.get("text", ""))
-                trimmed = _truncate_text(raw_text, remaining_chars)
-                if trimmed:
-                    remaining_chars -= len(trimmed)
-                    selected_reversed.append({"type": "text", "text": trimmed})
-
+            # 5. 添加引用提示
             citation_reminder = (
                 "\n\n----------------\n"
                 "FINAL INSTRUCTION:\n"
                 "You MUST cite your sources using the format [doc_id] or [Source ID] "
                 "at the end of every sentence where you use information from the context. "
+                "Also add a '### References' section at the end. Each line must be "
+                "'- [id] Document Title'. Use titles from the Reference Document List "
+                "in the context; if a title is missing, keep the id only.\n"
+                "Provide no more than 5 references and include only sources you cited inline. "
             )
-            final_user_content = list(reversed(selected_reversed))
-            for idx in range(len(final_user_content) - 1, -1, -1):
-                if final_user_content[idx].get("type") == "text":
-                    final_user_content[idx]["text"] = (
-                        final_user_content[idx].get("text", "") + citation_reminder
-                    )
-                    break
-            else:
-                final_user_content.append(
-                    {"type": "text", "text": citation_reminder.strip()}
-                )
+            # 追加到 Query 后面
+            final_content[-1]["text"] += citation_reminder
 
             final_messages = [
                 {"role": "system", "content": full_system},
-                {"role": "user", "content": final_user_content},
+                {"role": "user", "content": final_content},
             ]
 
             try:
@@ -348,9 +362,11 @@ def build_vision_model_func(
                 )
                 return response.choices[0].message.content
             except Exception as exc:
-                logger.error(f"Vision LLM Error: {exc}")
+                logger.error(f"Vision LLM Error (Query): {exc}")
                 raise
 
+        # === 场景 2: 图片入库描述生成 (有 image_data, 无 messages) ===
+        # 【修复】：独立 API 调用，防止掉入纯文本回退逻辑
         if image_data:
             import base64
             if isinstance(image_data, bytes):
@@ -358,11 +374,29 @@ def build_vision_model_func(
             else:
                 base64_image = str(image_data)
             
-            user_content_list.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-            })
+            # 构造单次请求
+            content_payload = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+            ]
+            msgs = [{"role": "user", "content": content_payload}]
+            if system_prompt:
+                msgs.insert(0, {"role": "system", "content": system_prompt})
             
+            try:
+                response = await client.chat.completions.create(
+                    model=settings.llm_model_name,
+                    messages=msgs,
+                    temperature=settings.temperature,
+                    max_tokens=settings.vision_max_tokens,
+                    **cleaned_kwargs,
+                )
+                return response.choices[0].message.content
+            except Exception as exc:
+                logger.error(f"Vision LLM Error (Ingest): {exc}")
+                return "" # 返回空，不阻断流程
+
+        # === 场景 3: 纯文本回退 ===
         return await build_llm_model_func(settings, client, logger)(
             prompt, system_prompt, history_messages, **kwargs
         )
@@ -405,14 +439,48 @@ class LocalRagService:
             enable_table_processing=True,
             enable_equation_processing=True,
         )
+        
+        # 【新增】定义 LightRAG 的高级参数
+        lightrag_init_kwargs = {
+            "rerank_model_func": self.rerank_func,
+            
+            # 1. 优化切片大小 (Small Chunking)
+            "chunk_token_size": self.settings.chunk_token_size,
+            "chunk_overlap_token_size": self.settings.chunk_overlap_token_size,
+            
+            # 2. 优化实体抽取 (限制类型，防止幻觉)
+            "addon_params": {
+                "entity_types": [
+                     "Person",
+                    "Creature",
+                    "Organization",
+                    "Location",
+                    "Event",
+                    "Concept",
+                    "Method",
+                    "Content",
+                    "Data",
+                    "Artifact",
+                    "NaturalObject",
+                ], 
+                "insert_batch_size": 10
+            },
+            
+            # 3. 优化 Token 限制
+            "max_entity_tokens": 8192,
+            "max_relation_tokens": 8192,
+            "max_total_tokens": 30000,
+            
+            # 4. 其他优化
+            "entity_extract_max_gleaning": 1, 
+        }
+
         return RAGAnything(
             config=config,
             llm_model_func=self.llm_model_func,
             vision_model_func=self.vision_model_func,
             embedding_func=self.embedding_func,
-            lightrag_kwargs={
-                "rerank_model_func": self.rerank_func,
-            },
+            lightrag_kwargs=lightrag_init_kwargs, # 传入优化后的参数
         )
 
     async def get_rag(self, doc_id: str) -> RAGAnything:
@@ -471,6 +539,7 @@ if __name__ == "__main__":
         
         print(f"开始处理: {target_path}")
         print(f"目标工作区: {settings.working_dir_root}/{workspace_name}")
+        print(f"当前策略: Chunk={settings.chunk_token_size}, MaxChars={settings.vlm_max_text_chars}")
 
         try:
             await service.ingest(file_path=target_path, doc_id=workspace_name)

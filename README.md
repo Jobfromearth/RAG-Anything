@@ -986,6 +986,126 @@ This method is particularly useful when:
 - You want to process programmatically generated content
 - You need to insert content from multiple sources into a single knowledge base
 - You have cached parsing results that you want to reuse
+# FastAPI Local UI
+
+
+
+Set API key:
+
+
+
+```bash
+
+set RAGANYTHING_API_KEY=your_key
+
+```
+
+
+
+Run server:
+
+
+
+```bash
+
+uvicorn server.app:app --host 0.0.0.0 --port 8000
+
+```
+
+
+
+Open: `http://localhost:8000`
+
+
+
+### RAG 应用程序
+
+`raganything_local_v2.py`, `app.py`, `local_rag.py`   三者是紧密协同工作的关系。它们构成了一个完整的 RAG 应用程序，从用户交互到核心逻辑处理，再到测试验证。
+
+
+
+具体关系如下：
+
+
+
+### 1. 角色分工
+
+
+
+#### **`raganything_local_v2.py` (测试脚本/客户端模拟)**
+
+* **角色**：它是一个**独立的脚本**，用来在命令行（CLI）环境下直接测试 RAG 的核心功能。
+
+* **作用**：它模拟了“用户提问”的过程。它初始化了 `LocalRagService`，然后向它扔了一堆硬编码的问题（queries），并打印结果。
+
+* **关系**：它引用并使用了 `local_rag.py`。你可以把它看作是一个“简易版的 app.py”，只是它没有网页界面，只有命令行输出。
+
+
+
+
+
+#### **`app.py` (Web 后端/控制器)**
+
+* **角色**：它是 **FastAPI Web 服务器**。
+
+* **作用**：它负责处理来自浏览器的 HTTP 请求（GET/POST）。它接收前端发来的“上传文件”、“提问”等请求，然后调用底层的业务逻辑来干活。
+
+* **关系**：它也引用并使用了 `local_rag.py`。它是 `LocalRagService` 的主要使用者。它把 HTTP 请求参数（doc_id, query 等）透传给 `LocalRagService`。
+
+
+
+
+
+#### **`local_rag.py` (核心业务逻辑/Model层)**
+
+* **角色**：它是 **RAG 引擎的封装层**。
+
+* **作用**：它干最脏最累的活。
+
+* 加载模型（Embedding, Rerank, LLM）。
+
+* 定义 System Prompt。
+
+* 封装 `RAGAnything` 库的初始化逻辑。
+
+* 提供 `ingest`（建库）和 `query`（检索）这两个核心方法。
+
+
+
+
+
+* **关系**：它是被别人调用的。无论是 `app.py` 还是 `raganything_local_v2.py`，都必须导入它才能工作。
+
+
+
+
+
+
+
+### 2. 协同工作流 (Workflow)
+
+
+
+当你启动 Web 服务时：
+
+
+
+1. **启动**：你运行 `uvicorn server.app:app ...`。
+
+2. **初始化**：`app.py` 启动，创建一个全局的 `_service` 对象（即 `LocalRagService` 的实例）。此时 `local_rag.py` 里的模型加载逻辑开始运行。
+
+3. **交互**：
+
+* **用户** 在网页 (`index.html`) 上点击“查询”。
+
+* **前端** 发送 POST 请求给 `app.py` 的 `/query` 接口。
+
+* **后端 (`app.py`)** 接收请求，解析参数，然后调用 `service.query(...)`。
+
+* **核心 (`local_rag.py`)** 的 `query` 方法被触发，它调用底层的 `rag.aquery`，执行向量检索、Rerank、VLM 生成等操作，最后返回答案。
+
+* **返回**：答案原路返回给前端展示。
+---
 
 ---
 

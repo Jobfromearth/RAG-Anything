@@ -20,15 +20,20 @@ from raganything.services.local_rag import LocalRagService, LocalRagSettings
 # 1. Configuration & Global Init
 # ==========================================
 
-async def process_with_rag(service: LocalRagService, file_path: str):
-    doc_id = await service.ingest(file_path)
+async def process_with_rag(service: LocalRagService, file_path: str, doc_id: str):
+    final_doc_id = await service.ingest(file_path, doc_id=doc_id)
 
     queries = [
-        "Explain the architecture shown in Figure 1.",
-        "In table 3, what is the number of the params of the base and big model?",
-        "What is the name of the chapter that mentions the table 1 in the rag-anything paper?",
-        "Give me the latex format expression of the equation (1) in the rag-anything paper.",
-        "Explain the equation 1",
+        "According to the paper, what are the specific visual encoder and language model (LLM) backbones used in the PaddleOCR-VL-1.5 architecture, and why was the 0.9B parameter size chosen?",
+        "Based on the evaluation tables, how does PaddleOCR-VL-1.5 compare with GPT-4o and Qwen2-VL-7B on the OmniDocBench benchmark? Please specify the scores for text recognition and layout analysis.",
+        "Does PaddleOCR-VL-1.5 use a dynamic resolution strategy (like 'AnyRes') or a fixed-grid approach for high-resolution document images? Describe how it handles images with extreme aspect ratios.",
+        "The paper mentions a multi-stage training process. Can you list and describe the three specific training phases (e.g., Pre-training, SFT) and the primary objective of each phase?",
+        "Look at the model's performance on the Wild Table Warehouse (WTW) dataset. What specific metrics are used to measure the cell-level structure recognition, and what score did PaddleOCR-VL-1.5 achieve?",
+        "Based on the visual samples in the figures, what specific types of 'in-the-wild' distortions (e.g., curved text, reflection, rotation) is the model trained to handle, and what techniques are used to improve its robustness?",
+        "The paper introduces a specialized capability for 'Seal Recognition'. What are the unique challenges of parsing seals in documents, and how does the model represent the output of a detected seal (e.g., text content or coordinates)?",
+        "What is the total number of document images used in the SFT stage, and what percentage of this data is synthetic versus real-world collected data?",
+        "In the context of robust document parsing, how does the paper differentiate the performance and efficiency of PaddleOCR-VL-1.5 compared to the MinerU system?",
+        "Does the model support LaTeX output for complex mathematical formulas? If so, what dataset was utilized to fine-tune its performance on formula recognition?",
     ]
 
     for i, query in enumerate(queries, 1):
@@ -39,12 +44,12 @@ async def process_with_rag(service: LocalRagService, file_path: str):
         query_param = {
             "mode": "hybrid",
             "top_k": 15,
-            "chunk_top_k": 30,
+            "chunk_top_k": 60,
             "enable_rerank": True,
             "vlm_enhanced": True,
         }
 
-        result = await service.query(doc_id, query, **query_param)
+        result = await service.query(final_doc_id, query, **query_param)
         service.logger.info(f"\n✅ Answer:\n{result}\n")
 
         if "[" in result and "]" in result:
@@ -59,17 +64,20 @@ async def process_with_rag(service: LocalRagService, file_path: str):
 
 def main():
     parser = argparse.ArgumentParser(description="RAGAnything Local Pipeline")
-    parser.add_argument("--input", "-i", default="./data/RAG_anything.pdf", help="Input file/dir")
-    
+
+    parser.add_argument("--path", "-p", required=True, help="要入库的文件或文件夹路径")
+    parser.add_argument("--id", "-i", required=True, help="工作空间名称 (doc_id)")
+
     args = parser.parse_args()
     
-    if not os.path.exists(args.input):
-        print(f"❌ Input not found: {args.input}")
+    if not os.path.exists(args.path):
+        print(f"❌ Input not found: {args.path}")
         return
 
     settings = LocalRagSettings.from_env()
     service = LocalRagService(settings)
-    asyncio.run(process_with_rag(service, args.input))
+
+    asyncio.run(process_with_rag(service, args.path, args.id))
 
 if __name__ == "__main__":
     main()
