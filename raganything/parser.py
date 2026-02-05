@@ -649,6 +649,16 @@ class MineruParser(Parser):
             cmd.extend(["-d", device])
         if vlm_url:
             cmd.extend(["-u", vlm_url])
+        
+        # ===== 传递 vLLM GPU 内存参数（如果设置了环境变量） =====
+        # MinerU 支持透传所有 vLLM 参数
+        # 参考: https://opendatalab.github.io/MinerU/usage/advanced_cli_parameters/
+        import os
+        gpu_mem_util = os.environ.get('MINERU_VLLM_GPU_MEMORY_UTILIZATION')
+        if gpu_mem_util is not None:
+            cmd.extend(["--gpu-memory-utilization", gpu_mem_util])
+            cls.logger.info(f"Setting MinerU vLLM GPU memory utilization: {gpu_mem_util}")
+        # ================================================================
 
         output_lines = []
         error_lines = []
